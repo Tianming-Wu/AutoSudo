@@ -35,7 +35,6 @@ VOID WINAPI ServiceCtrlHandler(DWORD controlCode) {
             }
 
             if (pipeThread) {
-                logt.info() << "Waiting for pipe thread to exit...";
                 WaitForSingleObject(pipeThread, 5000); // 最多等5秒
                 CloseHandle(pipeThread);
                 pipeThread = nullptr;
@@ -114,26 +113,49 @@ bool CreateProcessInUserSession(const ProcessContext& context) {
     }
     
     logt.info() << "Creating process in session: " << targetSessionId;
-    
-    HANDLE userToken = nullptr;
-    if (!WTSQueryUserToken(targetSessionId, &userToken)) {
-        DWORD error = GetLastError();
-        logt.error() << "WTSQueryUserToken failed for session " << targetSessionId << ": " << error;
-        
-        // 如果获取令牌失败，回退到普通创建方式
-        if (error == ERROR_NO_TOKEN) {
-            logt.warn() << "No user token available for session, falling back to default";
-            return CreateProcessWithContext(context);
-        }
+
+    // 首先获取SYSTEM账户的令牌
+    HANDLE systemToken = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ALL_ACCESS, &systemToken)) {
+        logt.error() << "OpenProcessToken failed: " << platform::windows::TranslateLastError();
+        return false;
+    }
+
+    // 复制令牌以便在不同会话中使用
+    HANDLE duplicatedToken = nullptr;
+    if (!DuplicateTokenEx(systemToken, TOKEN_ALL_ACCESS, nullptr, 
+                         SecurityImpersonation, TokenPrimary, &duplicatedToken)) {
+        logt.error() << "DuplicateTokenEx failed: " << platform::windows::TranslateLastError();
+        CloseHandle(systemToken);
+        return false;
+    }
+
+    CloseHandle(systemToken);
+
+    // 设置令牌到目标会话
+    if (!SetTokenInformation(duplicatedToken, TokenSessionId, &targetSessionId, sizeof(DWORD))) {
+        logt.error() << "SetTokenInformation failed: " << platform::windows::TranslateLastError();
+        CloseHandle(duplicatedToken);
         return false;
     }
     
-    // 准备环境块
+    HANDLE userToken = nullptr;
     LPVOID envBlock = nullptr;
-    if (!CreateEnvironmentBlock(&envBlock, userToken, FALSE)) {
-        logt.error() << "CreateEnvironmentBlock failed: " << GetLastError();
+
+    if (WTSQueryUserToken(targetSessionId, &userToken)) {
+        // 成功获取用户令牌，使用用户的环境
+        if (!CreateEnvironmentBlock(&envBlock, userToken, FALSE)) {
+            logt.warn() << "CreateEnvironmentBlock for user failed: " << platform::windows::TranslateLastError();
+            envBlock = nullptr;
+        }
         CloseHandle(userToken);
-        return false;
+    } else {
+        logt.warn() << "WTSQueryUserToken failed, using default environment: " << platform::windows::TranslateLastError();
+    }
+    
+    // 如果无法获取用户环境，使用进程的默认环境
+    if (!envBlock) {
+        logt.info() << "Using process default environment";
     }
     
     STARTUPINFO si = {0};
@@ -143,7 +165,7 @@ bool CreateProcessInUserSession(const ProcessContext& context) {
     PROCESS_INFORMATION pi = {0};
     
     BOOL success = CreateProcessAsUser(
-        userToken,
+        duplicatedToken,
         nullptr,
         const_cast<LPWSTR>(context.commandLine.c_str()),
         nullptr,
@@ -158,30 +180,51 @@ bool CreateProcessInUserSession(const ProcessContext& context) {
     
     if (!success) {
         DWORD error = GetLastError();
-        logt.error() << "CreateProcessAsUser failed: " << error;
+        logt.error() << "CreateProcessAsUser failed: " << platform::windows::TranslateError(error);
         
-        // 如果CreateProcessAsUser失败，尝试普通CreateProcess
-        if (error == ERROR_ELEVATION_REQUIRED || error == ERROR_PRIVILEGE_NOT_HELD) {
-            logt.warn() << "Falling back to CreateProcess due to privilege issues";
-            success = CreateProcessWithContext(context);
+        // 尝试回退到没有用户环境的方式
+        if (envBlock && (error == ERROR_INVALID_PARAMETER || error == ERROR_BAD_ENVIRONMENT)) {
+            logt.info() << "Retrying without user environment block...";
+            success = CreateProcessAsUser(
+                duplicatedToken,
+                nullptr,
+                const_cast<LPWSTR>(context.commandLine.c_str()),
+                nullptr,
+                nullptr,
+                FALSE,
+                CREATE_NEW_CONSOLE,
+                nullptr,
+                context.workingDirectory.empty() ? nullptr : context.workingDirectory.c_str(),
+                &si,
+                &pi
+            );
+            
+            if (success) {
+                logt.info() << "Process created successfully without user environment";
+            } else {
+                logt.error() << "Retry also failed: " << platform::windows::TranslateLastError();
+            }
         }
     } else {
-        logt.info() << "Process created successfully in user session, PID: " << pi.dwProcessId;
+        logt.info() << "Process created successfully in user session with SYSTEM privileges, PID: " << pi.dwProcessId;
+    }
+    
+    if (success) {
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
     }
     
     // 清理
-    DestroyEnvironmentBlock(envBlock);
-    CloseHandle(userToken);
+    if (envBlock) {
+        DestroyEnvironmentBlock(envBlock);
+    }
+    CloseHandle(duplicatedToken);
     
     return success;
 }
 
 bool ProcessClientRequest(PipeServer& server) {
     LOGT_LOCAL("ProcessClientRequest");
-
-    logt.info() << "Starting to read request..."; //-d
 
     // 读取请求
     std::wstring requestData = server.ReadRequest();
@@ -219,8 +262,6 @@ DWORD WINAPI PipeListenerThread(LPVOID param) {
     
     while (!shouldStopPipeThread) {
         PipeServer server;
-        
-        logt.info() << "Creating pipe and waiting for client...";
         
         // 这个调用会阻塞，但我们可以通过外部事件来中断
         if (server.StartNonBlocking()) {
