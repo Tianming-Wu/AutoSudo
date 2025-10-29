@@ -14,11 +14,13 @@ int ExecuteCommand(const std::wstring& commandLine) {
     // 构建进程上下文
     ProcessContext context;
     context.commandLine = commandLine;
-    
+
     // 获取当前工作目录
     wchar_t currentDir[MAX_PATH];
     GetCurrentDirectory(MAX_PATH, currentDir);
     context.workingDirectory = currentDir;
+
+    context.calledPath = currentDir;
     
     // 获取当前会话ID
     context.sessionId = ::WTSGetActiveConsoleSessionId();

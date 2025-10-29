@@ -9,6 +9,7 @@
 struct ProcessContext {
     std::wstring commandLine;
     std::wstring workingDirectory;
+    std::wstring calledPath;  // 新增：客户端调用路径
     std::vector<std::wstring> environmentVariables;
 
     DWORD sessionId = 0;  // 新增：目标会话ID

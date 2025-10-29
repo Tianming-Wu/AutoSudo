@@ -4,6 +4,7 @@ std::wstring ProcessContext::Serialize() const {
     std::wstring result = 
         commandLine + L"\n" + 
         workingDirectory + L"\n" +
+        calledPath + L"\n" +
         std::to_wstring(sessionId) + L"\n" +
         std::to_wstring(useCurrentSession) + L"\n";
     
@@ -26,6 +27,11 @@ ProcessContext ProcessContext::Deserialize(const std::wstring& data) {
     // 解析工作目录
     nextPos = data.find(L'\n', pos);
     context.workingDirectory = data.substr(pos, nextPos - pos);
+    pos = nextPos + 1;
+
+    // 解析调用路径（新增）
+    nextPos = data.find(L'\n', pos);
+    context.calledPath = data.substr(pos, nextPos - pos);
     pos = nextPos + 1;
     
     // 解析会话ID

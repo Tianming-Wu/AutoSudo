@@ -114,7 +114,22 @@ bool CreateProcessInUserSession(const ProcessContext& context) {
     
     logt.info() << "Creating process in session: " << targetSessionId;
 
-    // 首先获取SYSTEM账户的令牌
+    // 缓存当前工作目录
+    wchar_t originalDir[MAX_PATH];
+    GetCurrentDirectory(MAX_PATH, originalDir);
+    
+    // 切换到客户端调用目录（如果存在）
+    bool directoryChanged = false;
+    if (!context.calledPath.empty()) {
+        if (SetCurrentDirectory(context.calledPath.c_str())) {
+            logt.info() << "Changed working directory to: " << context.calledPath;
+            directoryChanged = true;
+        } else {
+            logt.warn() << "Failed to change working directory to: " << context.calledPath;
+        }
+    }
+
+    // 获取SYSTEM账户的令牌
     HANDLE systemToken = nullptr;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ALL_ACCESS, &systemToken)) {
         logt.error() << "OpenProcessToken failed: " << platform::windows::TranslateLastError();
@@ -219,6 +234,11 @@ bool CreateProcessInUserSession(const ProcessContext& context) {
         DestroyEnvironmentBlock(envBlock);
     }
     CloseHandle(duplicatedToken);
+
+    // 恢复原始工作目录
+    if (directoryChanged) {
+        SetCurrentDirectory(originalDir);
+    }
     
     return success;
 }
