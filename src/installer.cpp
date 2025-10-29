@@ -1,0 +1,143 @@
+#include <windows.h>
+#include <iostream>
+
+#include <SharedCppLib2/logt.hpp>
+#include <SharedCppLib2/platform.hpp>
+
+namespace svc {
+
+LOGT_MODULE("ServiceInstaller");
+
+bool InstallService() {
+    SC_HANDLE scm = OpenSCManager(nullptr, nullptr, SC_MANAGER_ALL_ACCESS);
+    if (!scm) {
+        logt.error() << "OpenSCManager failed: " << platform::windows::TranslateLastError();
+        return false;
+    }
+    
+    wchar_t modulePath[MAX_PATH];
+    GetModuleFileName(nullptr, modulePath, MAX_PATH);
+
+    std::wstring servicePath = modulePath;
+    size_t lastSlash = servicePath.find_last_of(L"\\/");
+    if (lastSlash != std::wstring::npos) {
+        // 获取当前目录，然后指向服务端程序
+        std::wstring currentDir = servicePath.substr(0, lastSlash + 1);
+        servicePath = currentDir + L"AutoSudoSvc.exe";
+        
+        logt.info() << "Installing service from: " << servicePath;
+    } else {
+        logt.error() << "Failed to extract directory from module path";
+        CloseServiceHandle(scm);
+        return false;
+    }
+
+    DWORD fileAttr = GetFileAttributes(servicePath.c_str());
+    if (fileAttr == INVALID_FILE_ATTRIBUTES) {
+        logt.error() << "Service executable not found: " << servicePath;
+        CloseServiceHandle(scm);
+        return false;
+    }
+    
+    SC_HANDLE service = CreateService(
+        scm,
+        L"AutoSudoService",
+        L"Auto Sudo Service",
+        SERVICE_ALL_ACCESS,
+        SERVICE_WIN32_OWN_PROCESS | SERVICE_INTERACTIVE_PROCESS,
+        SERVICE_AUTO_START, // 自动启动
+        SERVICE_ERROR_NORMAL,
+        servicePath.c_str(),
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr
+    );
+    
+    if (!service) {
+        logt.error() << "CreateService failed: " << platform::windows::TranslateLastError();
+        CloseHandle(scm);
+        return false;
+    }
+    
+    logt.info() << "Service installed successfully!";
+    
+    CloseServiceHandle(service);
+    CloseServiceHandle(scm);
+    return true;
+}
+
+bool UninstallService() {
+    SC_HANDLE scm = OpenSCManager(nullptr, nullptr, SC_MANAGER_ALL_ACCESS);
+    if (!scm) {
+        return false;
+    }
+    
+    SC_HANDLE service = OpenService(scm, L"AutoSudoService", DELETE);
+    if (!service) {
+        CloseServiceHandle(scm);
+        return false;
+    }
+    
+    bool success = DeleteService(service);
+    
+    CloseServiceHandle(service);
+    CloseServiceHandle(scm);
+    return success;
+}
+
+bool _StartService() {
+    SC_HANDLE scm = OpenSCManager(nullptr, nullptr, SC_MANAGER_ALL_ACCESS);
+    if (!scm) {
+        logt.error() << "OpenSCManager failed: " << platform::windows::TranslateLastError();
+        return false;
+    }
+    
+    SC_HANDLE service = OpenService(scm, L"AutoSudoService", SERVICE_START);
+    if (!service) {
+        logt.error() << "OpenService failed: " << platform::windows::TranslateLastError();
+        CloseServiceHandle(scm);
+        return false;
+    }
+    
+    bool success = ::StartService(service, 0, nullptr);
+    if (success) {
+        logt.info() << "Service started successfully!";
+    } else {
+        logt.error() << "StartService failed: " << platform::windows::TranslateLastError();
+    }
+    
+    CloseServiceHandle(service);
+    CloseServiceHandle(scm);
+    return success;
+}
+
+bool _StopService() {
+    SC_HANDLE scm = OpenSCManager(nullptr, nullptr, SC_MANAGER_ALL_ACCESS);
+    if (!scm) {
+        logt.error() << "OpenSCManager failed: " << platform::windows::TranslateLastError();
+        return false;
+    }
+    
+    SC_HANDLE service = OpenService(scm, L"AutoSudoService", SERVICE_STOP);
+    if (!service) {
+        logt.error() << "OpenService failed: " << platform::windows::TranslateLastError();
+        CloseServiceHandle(scm);
+        return false;
+    }
+    
+    SERVICE_STATUS status;
+    bool success = ControlService(service, SERVICE_CONTROL_STOP, &status);
+    if (success) {
+        logt.info() << "Service stopped successfully!";
+    } else {
+        logt.error() << "ControlService failed: " << platform::windows::TranslateLastError();
+    }
+    
+    CloseServiceHandle(service);
+    CloseServiceHandle(scm);
+    return success;
+}
+
+}
