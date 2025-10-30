@@ -23,13 +23,13 @@ public:
     void load();
     void save();
 
-    void insert(const authdat &dat);
     void insert(const fs::path &path);
     void remove(const fs::path &path);
 
     bool test(const fs::path &path);
 
 protected:
+    void insert(const authdat &dat);
     bool verifyHash(const fs::path& path, const std::bytearray& expected);
 
 private:
