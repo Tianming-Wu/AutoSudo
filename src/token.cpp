@@ -12,7 +12,7 @@ HANDLE getSystemToken(const ProcessContext& context) {
     HANDLE systemToken = nullptr;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ALL_ACCESS, &systemToken)) {
         logt.error() << "OpenProcessToken failed: " << platform::windows::TranslateLastError();
-        return false;
+        return nullptr;
     }
 
     HANDLE duplicatedToken = nullptr;
@@ -20,7 +20,7 @@ HANDLE getSystemToken(const ProcessContext& context) {
                          SecurityImpersonation, TokenPrimary, &duplicatedToken)) {
         logt.error() << "DuplicateTokenEx failed: " << platform::windows::TranslateLastError();
         CloseHandle(systemToken);
-        return false;
+        return nullptr;
     }
 
     CloseHandle(systemToken);

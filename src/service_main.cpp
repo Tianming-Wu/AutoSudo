@@ -19,6 +19,8 @@ HANDLE serviceStopEvent = nullptr;
 
 HANDLE pipeThread = nullptr;
 bool shouldStopPipeThread = false;
+wchar_t originalDir[MAX_PATH] = {0};
+inline void dirBack() { SetCurrentDirectory(originalDir); }
 
 VOID WINAPI ServiceCtrlHandler(DWORD controlCode) {
     LOGT_LOCAL("ServiceCtrlHandler");
@@ -115,17 +117,10 @@ bool CreateProcessInUserSession(const ProcessContext& context) {
     }
     
     logt.info() << "Creating process in session: " << targetSessionId;
-
-    // 缓存当前工作目录
-    wchar_t originalDir[MAX_PATH];
-    GetCurrentDirectory(MAX_PATH, originalDir);
     
-    // 切换到客户端调用目录（如果存在）
-    bool directoryChanged = false;
     if (!context.calledPath.empty()) {
         if (SetCurrentDirectory(context.calledPath.c_str())) {
             logt.info() << "Changed working directory to: " << context.calledPath;
-            directoryChanged = true;
         } else {
             logt.warn() << "Failed to change working directory to: " << context.calledPath;
         }
@@ -143,7 +138,16 @@ bool CreateProcessInUserSession(const ProcessContext& context) {
     case auth::list::system:
         targetToken = token::getSystemToken(context); break;
     case auth::list::invalid:
+    default:
         logt.warn() << "Request denied";
+        dirBack();
+        return false;
+    }
+
+    if(targetToken == nullptr) {
+        // 获取令牌失败，退出
+        // 日志已经在获取函数中输出，不再重复
+        dirBack();
         return false;
     }
 
@@ -151,6 +155,7 @@ bool CreateProcessInUserSession(const ProcessContext& context) {
     if (!SetTokenInformation(targetToken, TokenSessionId, &targetSessionId, sizeof(DWORD))) {
         logt.error() << "SetTokenInformation failed: " << platform::windows::TranslateLastError();
         CloseHandle(targetToken);
+        dirBack();
         return false;
     }
     
@@ -236,10 +241,7 @@ bool CreateProcessInUserSession(const ProcessContext& context) {
     CloseHandle(targetToken);
 
     // 恢复原始工作目录
-    if (directoryChanged) {
-        SetCurrentDirectory(originalDir);
-    }
-    
+    dirBack();
     return success;
 }
 
@@ -313,6 +315,9 @@ void MainServiceLoop() {
     logt.info() << "Service main loop started";
 
     UpdateServiceStatus(SERVICE_RUNNING);
+
+    // 缓存当前工作目录
+    GetCurrentDirectory(MAX_PATH, originalDir);
 
     shouldStopPipeThread = false;
     pipeThread = CreateThread(nullptr, 0, PipeListenerThread, nullptr, 0, nullptr);

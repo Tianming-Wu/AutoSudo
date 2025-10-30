@@ -51,7 +51,7 @@ void list::load() {
         
         // 解析格式: 文件路径|权限级别|SHA256哈希
         std::stringlist sl(line, "|");
-        if(!sl.size()==3) {
+        if(sl.size() != 3) {
             logt.warn() << "Invalid authlist format at line " << lineNumber;
             continue;
         }
