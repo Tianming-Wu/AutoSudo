@@ -17,7 +17,7 @@ public:
     PipeServer();
     ~PipeServer();
     
-    bool Start();
+    // bool Start();
     bool StartNonBlocking();
     std::wstring ReadRequest();
     // std::wstring ReadRequestWithTimeout(DWORD timeoutMs);
