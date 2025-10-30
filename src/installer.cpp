@@ -54,8 +54,19 @@ bool InstallService() {
         nullptr,
         nullptr
     );
-    
-    if (!service) {
+
+    // 设置服务描述
+    if (service) {
+        SERVICE_DESCRIPTION sd = {0};
+        WCHAR descp[] = L"Provides sudo-like privilege elevation for Windows applications";
+        sd.lpDescription = descp;
+        
+        ChangeServiceConfig2(
+            service,
+            SERVICE_CONFIG_DESCRIPTION,
+            &sd
+        );
+    } else {
         logt.error() << "CreateService failed: " << platform::windows::TranslateLastError();
         CloseHandle(scm);
         return false;
