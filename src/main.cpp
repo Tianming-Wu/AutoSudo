@@ -88,7 +88,7 @@ int ExecuteCommand(const std::wstring& commandLine, AuthLevel authLevel = AuthLe
 int wmain(int argc, wchar_t** argv) {
     // 初始化日志
     logt::claim("AutoSudo");
-    logt::file("autosudo.log");
+    logt::file(platform::executable_dir()/"autosudo.log");
     
     int result = 0;
     
