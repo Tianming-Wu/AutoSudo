@@ -20,10 +20,12 @@ find_package(SharedCppLib2 REQUIRED)
 
 # add_library(authlib STATIC src/authlib.cpp)
 # target_link_libraries(authlib wintrust)
+add_library(auth STATIC src/auth.cpp)
+target_link_libraries(auth PRIVATE SharedCppLib2::sha256)
 add_library(protocol STATIC src/protocol.cpp)
 
 add_executable(AutoSudoSvc src/service_main.cpp src/pipeserver.cpp)
-target_link_libraries(AutoSudoSvc protocol wtsapi32 userenv SharedCppLib2::logt)
+target_link_libraries(AutoSudoSvc protocol auth wtsapi32 userenv SharedCppLib2::logt)
 
 add_executable(AutoSudo src/main.cpp src/installer.cpp src/pipeclient.cpp)
 target_link_libraries(AutoSudo protocol wtsapi32 SharedCppLib2::logt)
