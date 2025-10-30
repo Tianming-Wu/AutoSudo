@@ -9,36 +9,50 @@
 
 #include <SharedCppLib2/logt.hpp>
 
-std::wstring ResolveExeutionPath(const std::wstring &commandLine) {
+std::wstring ResolveExecutablePath(const std::wstring& commandLine) {
+    // 首先检查是否已经是完整路径（带引号）
+    if (commandLine.length() >= 2 && commandLine[0] == L'\"' && commandLine.back() == L'\"') {
+        std::wstring quotedPath = commandLine.substr(1, commandLine.length() - 2);
+        
+        // 检查这个带引号的路径是否存在
+        DWORD attr = GetFileAttributes(quotedPath.c_str());
+        if (attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY)) {
+            return quotedPath;
+        }
+    }
+    
+    // 然后检查是否已经是完整路径（不带引号）
+    DWORD attr = GetFileAttributes(commandLine.c_str());
+    if (attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY)) {
+        return commandLine;
+    }
+    
+    // 如果不是完整路径，尝试提取可执行文件名
     std::wstring exeName = commandLine;
     size_t spacePos = commandLine.find(L' ');
     if (spacePos != std::wstring::npos) {
         exeName = commandLine.substr(0, spacePos);
+        
+        // 检查提取的部分是否已经是路径
+        attr = GetFileAttributes(exeName.c_str());
+        if (attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY)) {
+            return exeName;
+        }
     }
     
-    // 移除可能的引号
-    if (!exeName.empty() && exeName[0] == L'\"' && exeName.back() == L'\"') {
-        exeName = exeName.substr(1, exeName.length() - 2);
-    }
-    
+    // 使用 SearchPath 在系统路径中查找
     wchar_t fullPath[MAX_PATH];
     DWORD result = SearchPath(
-        nullptr,           // 使用系统搜索路径
-        exeName.c_str(),   // 文件名
-        L".exe",           // 扩展名（可选）
-        MAX_PATH,          // 缓冲区大小
-        fullPath,          // 输出完整路径
-        nullptr            // 文件部分指针（不需要）
+        nullptr,
+        exeName.c_str(),
+        L".exe",
+        MAX_PATH,
+        fullPath,
+        nullptr
     );
     
     if (result > 0 && result < MAX_PATH) {
         return std::wstring(fullPath);
-    }
-    
-    // 如果SearchPath失败，尝试直接作为路径访问
-    DWORD attr = GetFileAttributes(exeName.c_str());
-    if (attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY)) {
-        return exeName; // 已经是完整路径或相对路径
     }
     
     return L""; // 未找到
@@ -49,7 +63,7 @@ int ExecuteCommand(const std::wstring& commandLine, AuthLevel authLevel = AuthLe
     // 构建进程上下文
     ProcessContext context;
 
-    std::wstring resolvedPath = ResolveExeutionPath(commandLine);
+    std::wstring resolvedPath = ResolveExecutablePath(commandLine);
     if (resolvedPath.empty()) {
         logt.error() << "Cannot resolve executable path for: " << commandLine;
         return 1;
