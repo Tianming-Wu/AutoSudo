@@ -98,19 +98,16 @@ int wmain(int argc, wchar_t** argv) {
     } else {
         AuthLevel authLevel = AuthLevel::Admin; // 默认管理员权限
         int commandStartIndex = 1; // 命令起始位置
-        bool exec = false;
+        bool exec = true;
         
         std::wstring firstArg = argv[1];
         if (firstArg == L"--user") {
             authLevel = AuthLevel::User;
             commandStartIndex = 2;
-            exec = true;
         } else if (firstArg == L"--system") {
-            exec = true;
             authLevel = AuthLevel::System;
             commandStartIndex = 2;
         } else if (firstArg == L"--admin") {
-            exec = true;
             authLevel = AuthLevel::Admin;
             commandStartIndex = 2;
         } else if (firstArg == L"--help") {
@@ -120,15 +117,19 @@ int wmain(int argc, wchar_t** argv) {
         } else if (firstArg == L"--install") {
             result = svc::InstallService() ? 0 : 1;
             commandStartIndex = 2;
+            exec = false;
         } else if (firstArg == L"--uninstall") {
             result = svc::UninstallService() ? 0 : 1;
             commandStartIndex = 2;
+            exec = false;
         } else if (firstArg == L"--start") {
             result = svc::_StartService() ? 0 : 1;
             commandStartIndex = 2;
+            exec = false;
         } else if (firstArg == L"--stop") {
             result = svc::_StopService() ? 0 : 1;
             commandStartIndex = 2;
+            exec = false;
         }
 
         // 执行命令模式
