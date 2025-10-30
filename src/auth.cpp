@@ -30,7 +30,6 @@ void list::load() {
         return;
     }
 
-
     std::ifstream ifs(filePath);
     if(!ifs.is_open() || ifs.bad()) {
         logt.error() << "Failed to open allow list.";
@@ -57,14 +56,14 @@ void list::load() {
         }
 
         std::string &pathStr = sl[0];
-        authLevel al;
+        AuthLevel al;
         std::string &shaStr = sl[2];
 
         try {
-            al = static_cast<authLevel>(std::stoi(sl[1]));
+            al = static_cast<AuthLevel>(std::stoi(sl[1]));
         } catch(...) {
             logt.warn() << "Invalid allow level found at line " << lineNumber << ", fallback to user.";
-            al = authLevel::user;
+            al = AuthLevel::User;
         }
         
         // 验证SHA256格式（64个十六进制字符）
@@ -105,7 +104,7 @@ void list::save() {
     ofs << std::endl;
     
     for(const auto& [path, data] : m_authlist) {
-        ofs << path.string() << "|" << std::to_string(data.level) << "|" << data.sha.tohex() << std::endl;
+        ofs << path.string() << "|" << std::to_string(static_cast<int>(data.level)) << "|" << data.sha.tohex() << std::endl;
     }
     
     ofs.close();
@@ -114,11 +113,12 @@ void list::save() {
 
 void list::insert(const list::authdat &dat) {
     logt.info() << "Inserting new entry to allow list: " << dat.targetPath;
-    m_authlist.insert(std::make_pair(dat.targetPath, dat));
+    // m_authlist.insert(std::make_pair(dat.targetPath, dat));
+    m_authlist[dat.targetPath] = dat;
     save();
 }
 
-void list::insert(const fs::path &path, authLevel al) {
+void list::insert(const fs::path &path, AuthLevel al) {
     if(!fs::exists(path)) {
         logt.error() << "File does not exist: " << path;
         return;
@@ -128,7 +128,7 @@ void list::insert(const fs::path &path, authLevel al) {
     ad.targetPath = path;
     ad.level = al;
 
-    std::ifstream ifs(path);
+    std::ifstream ifs(path, std::ios::binary);
     if(!ifs.is_open() || ifs.bad()) {
         logt.error() << "Failed to open file while attempting to calcutate sha256 for " << path;
         return;
@@ -157,21 +157,24 @@ void list::remove(const fs::path &path) {
 }
 
 
-list::authLevel list::test(const fs::path &path) {
+AuthLevel list::test(const fs::path &path, AuthLevel requestedLevel) {
+    if(requestedLevel > AuthLevel::System || requestedLevel < AuthLevel::User) return AuthLevel::Invalid;
     auto it = m_authlist.find(path);
     if(it != m_authlist.end()) {
-        // 可选：验证文件哈希是否仍然匹配
         if(verifyHash(path, it->second.sha)) {
-            logt.info() << "Request authorized: " << path;
-            return it->second.level;
+            if(requestedLevel <= it->second.level) {
+                logt.info() << "Request authorized: " << path;
+                return requestedLevel;
+            } else return AuthLevel::InsufficientLevel;
         } else {
             logt.warn() << "File hash mismatch for: " << path;
-            return invalid;
+            logt.warn() << "Try removing and re-adding target.";
+            return AuthLevel::HashMismatch;
         }
     }
 
-    logt.warn() << "Request blocked unauthorized: " << path;
-    return invalid;
+    logt.warn() << "Request blocked not found: " << path;
+    return AuthLevel::NotFound;
 }
 
 bool list::verifyHash(const fs::path &path, const std::bytearray &expected)

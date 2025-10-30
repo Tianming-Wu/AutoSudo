@@ -6,7 +6,8 @@ std::wstring ProcessContext::Serialize() const {
         workingDirectory + L"\n" +
         calledPath + L"\n" +
         std::to_wstring(sessionId) + L"\n" +
-        std::to_wstring(useCurrentSession) + L"\n";
+        std::to_wstring(useCurrentSession) + L"\n" +
+        std::to_wstring(static_cast<int>(requestedAuthLevel)) + L"\n";
     
     for (const auto& env : environmentVariables) {
         result += env + L"\n";
@@ -44,6 +45,16 @@ ProcessContext ProcessContext::Deserialize(const std::wstring& data) {
     nextPos = data.find(L'\n', pos);
     std::wstring useSessionStr = data.substr(pos, nextPos - pos);
     context.useCurrentSession = (useSessionStr == L"1");
+    pos = nextPos + 1;
+
+    // 解析认证级别（新增）
+    nextPos = data.find(L'\n', pos);
+    std::wstring authLevelStr = data.substr(pos, nextPos - pos);
+    try {
+        context.requestedAuthLevel = static_cast<AuthLevel>(std::stoi(authLevelStr));
+    } catch (...) {
+        context.requestedAuthLevel = AuthLevel::Admin; // 默认值
+    }
     pos = nextPos + 1;
     
     // 解析环境变量

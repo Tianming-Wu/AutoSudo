@@ -4,6 +4,7 @@
 #include <vector>
 #include <userenv.h>
 #include <wtsapi32.h>
+#include <functional>
 
 #include "protocol.hpp"
 #include "pipeserver.hpp"
@@ -12,6 +13,8 @@
 // #include "authlib.hpp"
 
 #include <SharedCppLib2/platform.hpp>
+
+#define USERAUTH_WAIT_TIMEOUT 10000
 
 SERVICE_STATUS serviceStatus = {0};
 SERVICE_STATUS_HANDLE serviceStatusHandle = nullptr;
@@ -63,6 +66,66 @@ void UpdateServiceStatus(DWORD state, DWORD checkpoint = 0, DWORD waitHint = 0) 
         serviceStatus.dwWaitHint = waitHint;
         SetServiceStatus(serviceStatusHandle, &serviceStatus);
     }
+}
+
+enum class ConfirmType { NotFound, InsufficientLevel, HashMismatch };
+
+bool RequestUserConfirmation(const ProcessContext& context, ConfirmType type) {
+    LOGT_LOCAL("RequestUserConfirmation");
+
+    static const wchar_t* typeStr[] = {L"NOTFOUND", L"INSUFFICIENTLEVEL", L"HASHMISMATCH"};
+    static const wchar_t* levelStr[] = {L"USER", L"ADMIN", L"SYSTEM"};
+    
+    // 构建确认对话框命令行
+    std::wstring commandLine = (platform::executable_dir() / L"AuthUI.exe").wstring()
+        + L" " + typeStr[static_cast<int>(type)]
+        + L" " + levelStr[static_cast<int>(context.requestedAuthLevel)]
+        + L" \"" + context.commandLine + L"\"";
+
+    logt.debug() << "Auth command: " << commandLine;
+    
+    HANDLE userToken = token::getUserToken(context);
+    if(userToken == nullptr) {
+        logt.error() << "Failed to get user token.";
+        return false;
+    }
+
+    DWORD targetSessionId = context.sessionId;
+    if (!SetTokenInformation(userToken, TokenSessionId, &targetSessionId, sizeof(DWORD))) {
+        logt.error() << "SetTokenInformation failed: " << platform::windows::TranslateLastError();
+        CloseHandle(userToken);
+        return false;
+    }
+    
+    STARTUPINFO si = {0};
+    PROCESS_INFORMATION pi = {0};
+    si.cb = sizeof(STARTUPINFO);
+    
+    BOOL success = CreateProcessAsUser(userToken, nullptr, const_cast<LPWSTR>(commandLine.c_str()), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi);
+    
+    if (!success) {
+        logt.error() << "Failed to launch confirmation UI";
+        CloseHandle(userToken);
+        return false;
+    }
+    
+    // 等待用户响应
+    DWORD waitResult = WaitForSingleObject(pi.hProcess, USERAUTH_WAIT_TIMEOUT); // 10秒超时
+    if (waitResult == WAIT_TIMEOUT) {
+        logt.warn() << "Confirmation UI timeout, terminating...";
+        TerminateProcess(pi.hProcess, 1); // 超时视为拒绝
+    }
+    
+    DWORD exitCode;
+    GetExitCodeProcess(pi.hProcess, &exitCode);
+    
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    CloseHandle(userToken);
+    
+    bool confirmed = (exitCode == 0);
+    logt.info() << "User confirmation result: " << (confirmed ? "ALLOWED" : "DENIED");
+    return confirmed;
 }
 
 bool CreateProcessWithContext(const ProcessContext& context) {
@@ -126,22 +189,48 @@ bool CreateProcessInUserSession(const ProcessContext& context) {
         }
     }
 
-    auth::list::authLevel al = auth::authlist.test(context.commandLine);
+    AuthLevel authResult = auth::authlist.test(context.commandLine, context.requestedAuthLevel);
+
+    switch(authResult) {
+        case AuthLevel::Invalid:
+            logt.error() << "Invalid requested permission level, ignoring.";
+            dirBack();
+            return false;
+        case AuthLevel::NotFound:
+            if (!RequestUserConfirmation(context, ConfirmType::NotFound)) {
+                dirBack();
+                return false;
+            }
+            auth::authlist.insert(context.commandLine, context.requestedAuthLevel);
+            break;
+        case AuthLevel::InsufficientLevel:
+            if (!RequestUserConfirmation(context, ConfirmType::InsufficientLevel)) {
+                dirBack();
+                return false;
+            }
+            // 用户确认，更新权限级别
+            auth::authlist.insert(context.commandLine, context.requestedAuthLevel);
+            break;
+        case AuthLevel::HashMismatch:
+            dirBack();
+            return false;
+        default:
+            break;
+    }
+
+    AuthLevel finalLevel = (static_cast<int>(authResult) >= 0) ? authResult : context.requestedAuthLevel;
 
     HANDLE targetToken = nullptr;
 
-    switch(al) {
-    case auth::list::user:
+    switch(finalLevel) {
+    case AuthLevel::User:
         targetToken = token::getUserToken(context); break;
-    case auth::list::admin:
+    case AuthLevel::Admin:
         targetToken = token::getAdminToken(context); break;
-    case auth::list::system:
+    case AuthLevel::System:
         targetToken = token::getSystemToken(context); break;
-    case auth::list::invalid:
     default:
-        logt.warn() << "Request denied";
-        dirBack();
-        return false;
+        targetToken = nullptr;
     }
 
     if(targetToken == nullptr) {
@@ -226,7 +315,7 @@ bool CreateProcessInUserSession(const ProcessContext& context) {
             }
         }
     } else {
-        logt.info() << "Process created successfully in user session with SYSTEM privileges, PID: " << pi.dwProcessId;
+        logt.info() << "Process created successfully in user session, PID: " << pi.dwProcessId;
     }
     
     if (success) {

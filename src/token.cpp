@@ -30,7 +30,7 @@ HANDLE getSystemToken(const ProcessContext& context) {
 HANDLE getUserToken(const ProcessContext& context) {
     HANDLE userToken = nullptr;
     if (!WTSQueryUserToken(context.sessionId, &userToken)) {
-        logt.error() << "WTSQueryUserToken failed: " << GetLastError();
+        logt.error() << "WTSQueryUserToken failed: " << platform::windows::TranslateLastError();
         return nullptr;
     }
     return userToken;
@@ -42,7 +42,7 @@ HANDLE getAdminToken(const ProcessContext& context) {
     HANDLE elevatedToken = nullptr;
     if (!DuplicateTokenEx(userToken, TOKEN_ALL_ACCESS, nullptr, 
                          SecurityImpersonation, TokenPrimary, &elevatedToken)) {
-        logt.error() << "DuplicateTokenEx failed: " << GetLastError();
+        logt.error() << "DuplicateTokenEx failed: " << platform::windows::TranslateLastError();
         CloseHandle(userToken);
         return nullptr;
     }

@@ -6,6 +6,8 @@
 #include <SharedCppLib2/stringlist.hpp>
 #include <unordered_map>
 
+#include "protocol.hpp"
+
 namespace fs = std::filesystem;
 
 namespace auth {
@@ -15,23 +17,19 @@ class list {
 public:
     list();
 
-    enum authLevel {
-        invalid = -1, user = 0, admin = 1, system = 2
-    };
-
     struct authdat {
         fs::path targetPath;
         std::bytearray sha;
-        authLevel level;
+        AuthLevel level;
     };
 
     void load();
     void save();
 
-    void insert(const fs::path &path, authLevel al);
+    void insert(const fs::path &path, AuthLevel al);
     void remove(const fs::path &path);
 
-    authLevel test(const fs::path &path);
+    AuthLevel test(const fs::path &path, AuthLevel requestedLevel);
 
 protected:
     void insert(const authdat &dat);
