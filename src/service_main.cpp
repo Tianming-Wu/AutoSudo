@@ -485,7 +485,6 @@ VOID WINAPI ServiceMain(DWORD argc, LPTSTR* argv) {
     
     logt.info() << "Service stopped";
     logt::shutdown();
-    auth::authlist.save();
 }
 
 
@@ -507,7 +506,6 @@ int wmain(int argc, wchar_t** argv) {
         CloseHandle(serviceStopEvent);
         
         logt::shutdown();
-        auth::authlist.save();
         return 0;
     } else {
         logt::file("autosudo_service.log");
