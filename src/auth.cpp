@@ -1,8 +1,10 @@
 #include "auth.hpp"
 
 #include <fstream>
+#include <string>
 #include <SharedCppLib2/platform.hpp>
 #include <SharedCppLib2/sha256.hpp>
+#include <SharedCppLib2/stringlist.hpp>
 
 namespace auth {
 
@@ -47,15 +49,23 @@ void list::load() {
             continue;
         }
         
-        // 解析格式: 文件路径|SHA256哈希
-        size_t separatorPos = line.find('|');
-        if(separatorPos == std::string::npos) {
-            logt.warn() << "Invalid format at line " << lineNumber << ", missing separator '|'";
+        // 解析格式: 文件路径|权限级别|SHA256哈希
+        std::stringlist sl(line, "|");
+        if(!sl.size()==3) {
+            logt.warn() << "Invalid authlist format at line " << lineNumber;
             continue;
         }
-        
-        std::string pathStr = line.substr(0, separatorPos);
-        std::string shaStr = line.substr(separatorPos + 1);
+
+        std::string &pathStr = sl[0];
+        authLevel al;
+        std::string &shaStr = sl[2];
+
+        try {
+            al = static_cast<authLevel>(std::stoi(sl[1]));
+        } catch(...) {
+            logt.warn() << "Invalid allow level found at line " << lineNumber << ", fallback to user.";
+            al = authLevel::user;
+        }
         
         // 验证SHA256格式（64个十六进制字符）
         if(shaStr.length() != 64) {
@@ -65,6 +75,7 @@ void list::load() {
         
         authdat ad;
         ad.targetPath = fs::path(pathStr);
+        ad.level = al;
         ad.sha = std::bytearray::fromHex(shaStr);
         
         if(ad.sha.empty()) {
@@ -89,12 +100,12 @@ void list::save() {
     
     // 添加文件头注释
     ofs << "# AutoSudo Allow List" << std::endl;
-    ofs << "# Format: file_path|sha256_hash" << std::endl;
+    ofs << "# Format: file_path|level|sha256_hash" << std::endl;
     ofs << "# Generated automatically - do not edit manually" << std::endl;
     ofs << std::endl;
     
     for(const auto& [path, data] : m_authlist) {
-        ofs << path.string() << "|" << data.sha.tohex() << std::endl;
+        ofs << path.string() << "|" << std::to_string(data.level) << "|" << data.sha.tohex() << std::endl;
     }
     
     ofs.close();
@@ -107,7 +118,7 @@ void list::insert(const list::authdat &dat) {
     save();
 }
 
-void list::insert(const fs::path &path) {
+void list::insert(const fs::path &path, authLevel al) {
     if(!fs::exists(path)) {
         logt.error() << "File does not exist: " << path;
         return;
@@ -115,6 +126,7 @@ void list::insert(const fs::path &path) {
 
     authdat ad;
     ad.targetPath = path;
+    ad.level = al;
 
     std::ifstream ifs(path);
     if(!ifs.is_open() || ifs.bad()) {
@@ -145,21 +157,21 @@ void list::remove(const fs::path &path) {
 }
 
 
-bool list::test(const fs::path &path) {
+list::authLevel list::test(const fs::path &path) {
     auto it = m_authlist.find(path);
     if(it != m_authlist.end()) {
         // 可选：验证文件哈希是否仍然匹配
         if(verifyHash(path, it->second.sha)) {
             logt.info() << "Request authorized: " << path;
-            return true;
+            return it->second.level;
         } else {
             logt.warn() << "File hash mismatch for: " << path;
-            return false;
+            return invalid;
         }
     }
 
     logt.warn() << "Request blocked unauthorized: " << path;
-    return false;
+    return invalid;
 }
 
 bool list::verifyHash(const fs::path &path, const std::bytearray &expected)

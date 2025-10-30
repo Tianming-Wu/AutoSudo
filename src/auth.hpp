@@ -15,18 +15,23 @@ class list {
 public:
     list();
 
+    enum authLevel {
+        invalid = -1, user = 0, admin = 1, system = 2
+    };
+
     struct authdat {
         fs::path targetPath;
         std::bytearray sha;
+        authLevel level;
     };
 
     void load();
     void save();
 
-    void insert(const fs::path &path);
+    void insert(const fs::path &path, authLevel al);
     void remove(const fs::path &path);
 
-    bool test(const fs::path &path);
+    authLevel test(const fs::path &path);
 
 protected:
     void insert(const authdat &dat);

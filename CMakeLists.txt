@@ -24,7 +24,7 @@ add_library(auth STATIC src/auth.cpp)
 target_link_libraries(auth PRIVATE SharedCppLib2::sha256)
 add_library(protocol STATIC src/protocol.cpp)
 
-add_executable(AutoSudoSvc src/service_main.cpp src/pipeserver.cpp)
+add_executable(AutoSudoSvc src/service_main.cpp src/pipeserver.cpp src/token.cpp)
 target_link_libraries(AutoSudoSvc protocol auth wtsapi32 userenv SharedCppLib2::logt)
 
 add_executable(AutoSudo src/main.cpp src/installer.cpp src/pipeclient.cpp)

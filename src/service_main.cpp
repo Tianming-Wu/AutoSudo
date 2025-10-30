@@ -7,6 +7,8 @@
 
 #include "protocol.hpp"
 #include "pipeserver.hpp"
+#include "auth.hpp"
+#include "token.hpp"
 // #include "authlib.hpp"
 
 #include <SharedCppLib2/platform.hpp>
@@ -129,36 +131,34 @@ bool CreateProcessInUserSession(const ProcessContext& context) {
         }
     }
 
-    // 获取SYSTEM账户的令牌
-    HANDLE systemToken = nullptr;
-    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ALL_ACCESS, &systemToken)) {
-        logt.error() << "OpenProcessToken failed: " << platform::windows::TranslateLastError();
+    auth::list::authLevel al = auth::authlist.test(context.commandLine);
+
+    HANDLE targetToken = nullptr;
+
+    switch(al) {
+    case auth::list::user:
+        targetToken = token::getUserToken(context); break;
+    case auth::list::admin:
+        targetToken = token::getAdminToken(context); break;
+    case auth::list::system:
+        targetToken = token::getSystemToken(context); break;
+    case auth::list::invalid:
+        logt.warn() << "Request denied";
         return false;
     }
-
-    // 复制令牌以便在不同会话中使用
-    HANDLE duplicatedToken = nullptr;
-    if (!DuplicateTokenEx(systemToken, TOKEN_ALL_ACCESS, nullptr, 
-                         SecurityImpersonation, TokenPrimary, &duplicatedToken)) {
-        logt.error() << "DuplicateTokenEx failed: " << platform::windows::TranslateLastError();
-        CloseHandle(systemToken);
-        return false;
-    }
-
-    CloseHandle(systemToken);
 
     // 设置令牌到目标会话
-    if (!SetTokenInformation(duplicatedToken, TokenSessionId, &targetSessionId, sizeof(DWORD))) {
+    if (!SetTokenInformation(targetToken, TokenSessionId, &targetSessionId, sizeof(DWORD))) {
         logt.error() << "SetTokenInformation failed: " << platform::windows::TranslateLastError();
-        CloseHandle(duplicatedToken);
+        CloseHandle(targetToken);
         return false;
     }
     
     HANDLE userToken = nullptr;
     LPVOID envBlock = nullptr;
 
+    // 使用用户的环境块
     if (WTSQueryUserToken(targetSessionId, &userToken)) {
-        // 成功获取用户令牌，使用用户的环境
         if (!CreateEnvironmentBlock(&envBlock, userToken, FALSE)) {
             logt.warn() << "CreateEnvironmentBlock for user failed: " << platform::windows::TranslateLastError();
             envBlock = nullptr;
@@ -180,7 +180,7 @@ bool CreateProcessInUserSession(const ProcessContext& context) {
     PROCESS_INFORMATION pi = {0};
     
     BOOL success = CreateProcessAsUser(
-        duplicatedToken,
+        targetToken,
         nullptr,
         const_cast<LPWSTR>(context.commandLine.c_str()),
         nullptr,
@@ -201,7 +201,7 @@ bool CreateProcessInUserSession(const ProcessContext& context) {
         if (envBlock && (error == ERROR_INVALID_PARAMETER || error == ERROR_BAD_ENVIRONMENT)) {
             logt.info() << "Retrying without user environment block...";
             success = CreateProcessAsUser(
-                duplicatedToken,
+                targetToken,
                 nullptr,
                 const_cast<LPWSTR>(context.commandLine.c_str()),
                 nullptr,
@@ -233,7 +233,7 @@ bool CreateProcessInUserSession(const ProcessContext& context) {
     if (envBlock) {
         DestroyEnvironmentBlock(envBlock);
     }
-    CloseHandle(duplicatedToken);
+    CloseHandle(targetToken);
 
     // 恢复原始工作目录
     if (directoryChanged) {
@@ -343,6 +343,8 @@ VOID WINAPI ServiceMain(DWORD argc, LPTSTR* argv) {
     logt::file(platform::executable_dir()/"autosudo_service.log");
     logt::claim("ServiceMain");
 
+    auth::authlist.load();
+
     serviceStatusHandle = RegisterServiceCtrlHandler(L"AutoSudoService", ServiceCtrlHandler);
     
     if (!serviceStatusHandle) {
@@ -389,6 +391,7 @@ VOID WINAPI ServiceMain(DWORD argc, LPTSTR* argv) {
     
     logt.info() << "Service stopped";
     logt::shutdown();
+    auth::authlist.save();
 }
 
 
@@ -399,6 +402,7 @@ int wmain(int argc, wchar_t** argv) {
     // 如果是控制台模式运行（调试用）
     if (argc > 1 && std::wstring(argv[1]) == L"--debug") {
         logt::file("autosudo_service_debug.log");
+        auth::authlist.load();
 
         logt::setFilterLevel(LogLevel::l_DEBUG);
 
@@ -409,6 +413,7 @@ int wmain(int argc, wchar_t** argv) {
         CloseHandle(serviceStopEvent);
         
         logt::shutdown();
+        auth::authlist.save();
         return 0;
     } else {
         logt::file("autosudo_service.log");
