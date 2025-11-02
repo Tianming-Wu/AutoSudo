@@ -106,15 +106,47 @@ int ExecuteCommand(const std::wstring& commandLine, AuthLevel authLevel = AuthLe
     return 1;
 }
 
+#ifdef AUTOSUDO_GUI
+// GUI版本使用 wWinMain
+int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow) {
+    int argc;
+    wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+#else
+// 命令行版本使用 wmain  
 int wmain(int argc, wchar_t** argv) {
+#endif
+
     // 初始化日志
     logt::claim("AutoSudo");
     logt::file(platform::executable_dir()/"autosudo.log");
+
+    ///TODO: 为GUI版本关闭命令行日志输出
     
     int result = 0;
     
     if (argc < 2) {
-        // ShowUsage();
+#ifdef AUTOSUDO_GUI
+        MessageBox(nullptr, 
+                  L"用法: AutoSudoW [权限选项] <命令>\n\n"
+                  L"权限选项:\n"
+                  L"  --user    用户权限\n"  
+                  L"  --admin   管理员权限 (默认)\n"
+                  L"  --system  SYSTEM权限\n\n"
+                  L"示例:\n"
+                  L"  AutoSudoW notepad\n"
+                  L"  AutoSudoW --user cmd",
+                  L"AutoSudoW - 帮助", 
+                  MB_OK | MB_ICONINFORMATION);
+#else
+        std::wcout << L"用法: AutoSudo [权限选项] <命令>" << std::endl;
+        std::wcout << L"权限选项:" << std::endl;
+        std::wcout << L"  --user    用户权限" << std::endl;
+        std::wcout << L"  --admin   管理员权限 (默认)" << std::endl;
+        std::wcout << L"  --system  SYSTEM权限" << std::endl;
+        std::wcout << L"示例:" << std::endl;
+        std::wcout << L"  AutoSudo notepad" << std::endl;
+        std::wcout << L"  AutoSudo --user cmd" << std::endl;
+#endif
         result = 1;
     } else {
         AuthLevel authLevel = AuthLevel::Admin; // 默认管理员权限
@@ -180,8 +212,12 @@ int wmain(int argc, wchar_t** argv) {
             }
         }
     }
+
+#ifdef AUTOSUDO_GUI
+    LocalFree(argv);
+#endif
     
-    // 关闭日志
+    // 清理并退出
     logt::shutdown();
     return result;
 }

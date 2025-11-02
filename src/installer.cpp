@@ -73,6 +73,16 @@ bool InstallService() {
     }
     
     logt.info() << "Service installed successfully!";
+#ifdef AUTOSUDO_GUI
+    MessageBox(nullptr,
+               L"服务安装成功！\n\n"
+               L"您可以在服务管理器中启动“Auto Sudo Service”服务，"
+               L"或者重启计算机以自动启动该服务。",
+               L"安装成功",
+               MB_OK | MB_ICONINFORMATION);
+#else
+    std::cout << "Service installed successfully!" << std::endl;
+#endif
     
     CloseServiceHandle(service);
     CloseServiceHandle(scm);
@@ -93,6 +103,17 @@ bool UninstallService() {
     
     bool success = DeleteService(service);
     
+    logt.info() << "Service uninstalled successfully!";
+
+#ifdef AUTOSUDO_GUI
+    MessageBox(nullptr,
+               L"服务卸载成功！",
+               L"卸载成功",
+               MB_OK | MB_ICONINFORMATION);
+#else
+    std::cout << "Service uninstalled successfully!" << std::endl;
+#endif
+
     CloseServiceHandle(service);
     CloseServiceHandle(scm);
     return success;
@@ -118,6 +139,17 @@ bool _StartService() {
     } else {
         logt.error() << "StartService failed: " << platform::windows::TranslateLastError();
     }
+
+    logt.info() << "Service started successfully!";
+
+#ifdef AUTOSUDO_GUI
+    MessageBox(nullptr,
+               L"服务启动成功！",
+               L"启动成功",
+               MB_OK | MB_ICONINFORMATION);
+#else
+    std::cout << "Service started successfully!" << std::endl;
+#endif
     
     CloseServiceHandle(service);
     CloseServiceHandle(scm);
@@ -145,6 +177,17 @@ bool _StopService() {
     } else {
         logt.error() << "ControlService failed: " << platform::windows::TranslateLastError();
     }
+
+    logt.info() << "Service stopped successfully!";
+
+#ifdef AUTOSUDO_GUI
+    MessageBox(nullptr,
+               L"服务停止成功！",
+               L"停止成功",
+               MB_OK | MB_ICONINFORMATION);
+#else
+    std::cout << "Service stopped successfully!" << std::endl;
+#endif
     
     CloseServiceHandle(service);
     CloseServiceHandle(scm);

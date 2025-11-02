@@ -29,8 +29,15 @@ target_link_libraries(protocol PRIVATE SharedCppLib2::basic)
 add_executable(AutoSudoSvc src/service_main.cpp src/pipeserver.cpp src/token.cpp)
 target_link_libraries(AutoSudoSvc protocol auth wtsapi32 userenv SharedCppLib2::logt SharedCppLib2::platform)
 
+# command-line version
 add_executable(AutoSudo src/main.cpp src/installer.cpp src/pipeclient.cpp)
 target_link_libraries(AutoSudo protocol wtsapi32 SharedCppLib2::basic SharedCppLib2::logt SharedCppLib2::platform)
+
+# gui version
+add_executable(AutoSudoW src/main.cpp src/installer.cpp src/pipeclient.cpp)
+target_link_libraries(AutoSudoW protocol comctl32 wtsapi32 SharedCppLib2::basic SharedCppLib2::logt SharedCppLib2::platform)
+set_target_properties(AutoSudoW PROPERTIES WIN32_EXECUTABLE TRUE)
+target_compile_definitions(AutoSudoW PUBLIC AUTOSUDO_GUI)
 
 add_executable(AuthUI src/auth_ui.cpp)
 set_target_properties(AuthUI PROPERTIES WIN32_EXECUTABLE TRUE)
