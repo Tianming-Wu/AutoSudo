@@ -2,15 +2,20 @@
 #include <string>
 #include <vector>
 
+#pragma comment(linker, "/manifestdependency:\"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
+
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow) {
+    // 使用Per-Monitor V2 DPI感知（Windows 10 1703+）
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+
     // 解析命令行参数
     int argc;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     
     if (argc < 4) {
-        MessageBox(nullptr, 
+        MessageBox(nullptr,
                   L"参数错误：缺少必要的参数\n\n"
-                  L"用法: AuthUI.exe <ConfirmType> <AuthLevel> <ProgramPath>", 
+                  L"请联系开发者并附带日志autosudo_service.log。", 
                   L"AutoSudo AuthUI - 错误", 
                   MB_OK | MB_ICONERROR);
         LocalFree(argv);
