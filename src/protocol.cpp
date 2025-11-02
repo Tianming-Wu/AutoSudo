@@ -18,61 +18,53 @@ std::wstring ProcessContext::Serialize() const {
 
 ProcessContext ProcessContext::Deserialize(const std::wstring& data) {
     ProcessContext context;
-    size_t pos = 0;
-    size_t nextPos;
     
-    // 解析命令行
-    nextPos = data.find(L'\n', pos);
-    context.program = data.substr(pos, nextPos - pos);
-    pos = nextPos + 1;
-
-    //解析参数
-    nextPos = data.find(L'\n', pos);
-    context.arguments = std::wstringlist::unpack(data.substr(pos, nextPos - pos));
-    pos = nextPos + 1;
+    // 使用 stringlist 分割数据，更优雅且安全
+    std::wstringlist content(data, L"\n");
+    
+    // 检查最小字段数量
+    if (content.size() < 7) {
+        throw std::runtime_error("Invalid serialized data: insufficient fields");
+    }
+    
+    size_t index = 0;
+    
+    // 解析程序路径
+    context.program = content.vat(index++);
+    
+    // 解析参数
+    context.arguments = std::wstringlist::unpack(content.vat(index++));
     
     // 解析工作目录
-    nextPos = data.find(L'\n', pos);
-    context.workingDirectory = data.substr(pos, nextPos - pos);
-    pos = nextPos + 1;
-
-    // 解析调用路径（新增）
-    nextPos = data.find(L'\n', pos);
-    context.calledPath = data.substr(pos, nextPos - pos);
-    pos = nextPos + 1;
+    context.workingDirectory = content.vat(index++);
+    
+    // 解析调用路径
+    context.calledPath = content.vat(index++);
     
     // 解析会话ID
-    nextPos = data.find(L'\n', pos);
-    std::wstring sessionIdStr = data.substr(pos, nextPos - pos);
-    context.sessionId = std::stoul(sessionIdStr);
-    pos = nextPos + 1;
+    try {
+        context.sessionId = std::stoul(content.vat(index++));
+    } catch (...) {
+        context.sessionId = 0;
+    }
     
     // 解析useCurrentSession
-    nextPos = data.find(L'\n', pos);
-    std::wstring useSessionStr = data.substr(pos, nextPos - pos);
+    std::wstring useSessionStr = content.vat(index++);
     context.useCurrentSession = (useSessionStr == L"1");
-    pos = nextPos + 1;
-
+    
     // 解析认证级别
-    nextPos = data.find(L'\n', pos);
-    std::wstring authLevelStr = data.substr(pos, nextPos - pos);
     try {
-        context.requestedAuthLevel = static_cast<AuthLevel>(std::stoi(authLevelStr));
+        context.requestedAuthLevel = static_cast<AuthLevel>(std::stoi(content.vat(index++)));
     } catch (...) {
         context.requestedAuthLevel = AuthLevel::Admin; // 默认值
     }
-    pos = nextPos + 1;
     
-    // 解析环境变量
-    while (pos < data.size()) {
-        nextPos = data.find(L'\n', pos);
-        if (nextPos == std::wstring::npos) break;
-        
-        std::wstring env = data.substr(pos, nextPos - pos);
+    // 解析环境变量（剩余的所有行）
+    while (index < content.size()) {
+        std::wstring env = content.vat(index++);
         if (!env.empty()) {
             context.environmentVariables.push_back(env);
         }
-        pos = nextPos + 1;
     }
     
     return context;
