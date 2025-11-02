@@ -2,7 +2,8 @@
 
 std::wstring ProcessContext::Serialize() const {
     std::wstring result = 
-        commandLine + L"\n" + 
+        program + L"\n" + 
+        arguments.pack() + L"\n" + 
         workingDirectory + L"\n" +
         calledPath + L"\n" +
         std::to_wstring(sessionId) + L"\n" +
@@ -22,7 +23,12 @@ ProcessContext ProcessContext::Deserialize(const std::wstring& data) {
     
     // 解析命令行
     nextPos = data.find(L'\n', pos);
-    context.commandLine = data.substr(pos, nextPos - pos);
+    context.program = data.substr(pos, nextPos - pos);
+    pos = nextPos + 1;
+
+    //解析参数
+    nextPos = data.find(L'\n', pos);
+    context.arguments = std::wstringlist::unpack(data.substr(pos, nextPos - pos));
     pos = nextPos + 1;
     
     // 解析工作目录
@@ -47,7 +53,7 @@ ProcessContext ProcessContext::Deserialize(const std::wstring& data) {
     context.useCurrentSession = (useSessionStr == L"1");
     pos = nextPos + 1;
 
-    // 解析认证级别（新增）
+    // 解析认证级别
     nextPos = data.find(L'\n', pos);
     std::wstring authLevelStr = data.substr(pos, nextPos - pos);
     try {

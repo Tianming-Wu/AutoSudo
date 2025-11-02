@@ -8,6 +8,7 @@
 #include "installer.hpp"
 
 #include <SharedCppLib2/logt.hpp>
+#include <SharedCppLib2/stringlist.hpp>
 
 std::wstring ResolveExecutablePath(const std::wstring& commandLine) {
     // 首先检查是否已经是完整路径（带引号）
@@ -63,12 +64,18 @@ int ExecuteCommand(const std::wstring& commandLine, AuthLevel authLevel = AuthLe
     // 构建进程上下文
     ProcessContext context;
 
-    std::wstring resolvedPath = ResolveExecutablePath(commandLine);
+    std::wstringlist args = std::wstringlist::xsplit(commandLine, L" ", L"\"'");
+
+    if (args.empty()) { return 1; }
+
+    std::wstring resolvedPath = ResolveExecutablePath(args[0]);
     if (resolvedPath.empty()) {
         logt.error() << "Cannot resolve executable path for: " << commandLine;
         return 1;
     }
-    context.commandLine = resolvedPath;
+
+    context.program = resolvedPath;
+    context.arguments = args.subarr(1);
 
     // 获取当前工作目录
     wchar_t currentDir[MAX_PATH];

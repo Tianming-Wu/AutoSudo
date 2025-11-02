@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <windows.h>
+#include <SharedCppLib2/stringlist.hpp>
 
 #define PIPE_NAME L"\\\\.\\pipe\\AutoSudoPipe"
 #define BUFFER_SIZE 4096
@@ -18,7 +19,8 @@ enum class AuthLevel {
 };
 
 struct ProcessContext {
-    std::wstring commandLine;
+    std::wstring program;
+    std::wstringlist arguments;
     std::wstring workingDirectory;
     std::wstring calledPath;  //客户端调用路径
     std::vector<std::wstring> environmentVariables;

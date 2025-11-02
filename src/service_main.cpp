@@ -80,7 +80,7 @@ bool RequestUserConfirmation(const ProcessContext& context, ConfirmType type) {
     std::wstring commandLine = (platform::executable_dir() / L"AuthUI.exe").wstring()
         + L" " + typeStr[static_cast<int>(type)]
         + L" " + levelStr[static_cast<int>(context.requestedAuthLevel)]
-        + L" \"" + context.commandLine + L"\"";
+        + L" \"" + context.program + L"\"";
 
     logt.debug() << "Auth command: " << commandLine;
     
@@ -128,6 +128,12 @@ bool RequestUserConfirmation(const ProcessContext& context, ConfirmType type) {
     return confirmed;
 }
 
+std::wstring MakeFullCommandLine(const ProcessContext& context) {
+    std::wstringlist args = context.arguments;
+    args.insert(args.begin(), context.program);
+    return args.xjoin();
+}
+
 bool CreateProcessWithContext(const ProcessContext& context) {
     LOGT_LOCAL("CreateProcessWithContext");
     // 准备环境块
@@ -146,10 +152,12 @@ bool CreateProcessWithContext(const ProcessContext& context) {
     si.lpDesktop = const_cast<LPWSTR>(L"winsta0\\default");
     
     PROCESS_INFORMATION pi = {0};
+
+    std::wstring fullCommandLine = MakeFullCommandLine(context);
     
     if (!CreateProcess(
         nullptr,
-        const_cast<LPWSTR>(context.commandLine.c_str()),
+        const_cast<LPWSTR>(fullCommandLine.c_str()),
         nullptr,
         nullptr,
         FALSE,
@@ -162,8 +170,8 @@ bool CreateProcessWithContext(const ProcessContext& context) {
         logt.error() << "CreateProcess failed: " << platform::windows::TranslateLastError();
         return false;
     }
-    
-    logt.info() << "Process created successfully: " << context.commandLine;
+
+    logt.info() << "Process created successfully: " << fullCommandLine;
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
     return true;
@@ -189,7 +197,7 @@ bool CreateProcessInUserSession(const ProcessContext& context) {
         }
     }
 
-    AuthLevel authResult = auth::authlist.test(context.commandLine, context.requestedAuthLevel);
+    AuthLevel authResult = auth::authlist.test(context.program, context.requestedAuthLevel);
 
     switch(authResult) {
         case AuthLevel::Invalid:
@@ -201,7 +209,7 @@ bool CreateProcessInUserSession(const ProcessContext& context) {
                 dirBack();
                 return false;
             }
-            auth::authlist.insert(context.commandLine, context.requestedAuthLevel);
+            auth::authlist.insert(context.program, context.requestedAuthLevel);
             break;
         case AuthLevel::InsufficientLevel:
             if (!RequestUserConfirmation(context, ConfirmType::InsufficientLevel)) {
@@ -209,7 +217,7 @@ bool CreateProcessInUserSession(const ProcessContext& context) {
                 return false;
             }
             // 用户确认，更新权限级别
-            auth::authlist.insert(context.commandLine, context.requestedAuthLevel);
+            auth::authlist.insert(context.program, context.requestedAuthLevel);
             break;
         case AuthLevel::HashMismatch:
             dirBack();
@@ -272,11 +280,13 @@ bool CreateProcessInUserSession(const ProcessContext& context) {
     si.lpDesktop = const_cast<LPWSTR>(L"winsta0\\default");
     
     PROCESS_INFORMATION pi = {0};
+
+    std::wstring fullCommandLine = MakeFullCommandLine(context);
     
     BOOL success = CreateProcessAsUser(
         targetToken,
         nullptr,
-        const_cast<LPWSTR>(context.commandLine.c_str()),
+        const_cast<LPWSTR>(fullCommandLine.c_str()),
         nullptr,
         nullptr,
         FALSE,
@@ -297,7 +307,7 @@ bool CreateProcessInUserSession(const ProcessContext& context) {
             success = CreateProcessAsUser(
                 targetToken,
                 nullptr,
-                const_cast<LPWSTR>(context.commandLine.c_str()),
+                const_cast<LPWSTR>(fullCommandLine.c_str()),
                 nullptr,
                 nullptr,
                 FALSE,
@@ -346,7 +356,7 @@ bool ProcessClientRequest(PipeServer& server) {
     
     // 反序列化上下文
     ProcessContext context = ProcessContext::Deserialize(requestData);
-    logt.info() << "Received command: " << context.commandLine;
+    logt.info() << "Received command: " << context.program << ", args: " << context.arguments.xjoin();
     
     // 根据上下文决定创建方式
     bool success = false;
