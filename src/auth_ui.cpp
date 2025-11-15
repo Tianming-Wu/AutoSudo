@@ -2,6 +2,12 @@
 #include <string>
 #include <vector>
 
+LPWSTR* argv;
+int cleanup(const int &ret) {
+    LocalFree(argv);
+    return ret;
+}
+
 #pragma comment(linker, "/manifestdependency:\"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow) {
@@ -10,7 +16,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
 
     // 解析命令行参数
     int argc;
-    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     
     if (argc < 4) {
         MessageBox(nullptr,
@@ -18,8 +24,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
                   L"请联系开发者并附带日志autosudo_service.log。", 
                   L"AutoSudo AuthUI - 错误", 
                   MB_OK | MB_ICONERROR);
-        LocalFree(argv);
-        return 1;
+        return cleanup(1);
     }
     
     std::wstring confirmType = argv[1];  // NOTFOUND, INSUFFICIENTLEVEL, HASHMISMATCH
@@ -53,8 +58,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
         // 哈希不匹配时显示错误对话框，不允许继续
         MessageBox(nullptr, message.c_str(), title.c_str(), 
                   MB_OK | MB_ICONWARNING | MB_SYSTEMMODAL);
-        LocalFree(argv);
-        return 1;
+        return cleanup(1);
     }
     else {
         message = L"未知的确认类型：\n\n"
@@ -72,7 +76,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     // 显示确认对话框
     int result = MessageBox(nullptr, message.c_str(), title.c_str(), 
                            MB_YESNO | iconType | MB_SYSTEMMODAL);
-    
-    LocalFree(argv);
-    return (result == IDYES) ? 0 : 1;
+                           
+    return cleanup((result == IDYES) ? 0 : 1);
 }

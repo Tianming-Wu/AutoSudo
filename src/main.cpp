@@ -10,17 +10,22 @@
 #include <SharedCppLib2/logt.hpp>
 #include <SharedCppLib2/stringlist.hpp>
 
+#ifdef AUTOSUDO_GUI
+    #pragma comment(linker, "/manifestdependency:\"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
+#endif
+
 std::wstring ResolveExecutablePath(const std::wstring& commandLine) {
-    // 首先检查是否已经是完整路径（带引号）
-    if (commandLine.length() >= 2 && commandLine[0] == L'\"' && commandLine.back() == L'\"') {
-        std::wstring quotedPath = commandLine.substr(1, commandLine.length() - 2);
+    // 由于在上一步已经确保不包含引号所以不做处理
+    // // 首先检查是否已经是完整路径（带引号）
+    // if (commandLine.length() >= 2 && commandLine[0] == L'\"' && commandLine.back() == L'\"') {
+    //     std::wstring quotedPath = commandLine.substr(1, commandLine.length() - 2);
         
-        // 检查这个带引号的路径是否存在
-        DWORD attr = GetFileAttributes(quotedPath.c_str());
-        if (attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY)) {
-            return quotedPath;
-        }
-    }
+    //     // 检查这个带引号的路径是否存在
+    //     DWORD attr = GetFileAttributes(quotedPath.c_str());
+    //     if (attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY)) {
+    //         return quotedPath;
+    //     }
+    // }
     
     // 然后检查是否已经是完整路径（不带引号）
     DWORD attr = GetFileAttributes(commandLine.c_str());
