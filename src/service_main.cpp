@@ -12,6 +12,8 @@
 #include "token.hpp"
 // #include "authlib.hpp"
 
+#include "auth_ui.hpp"
+
 #include <SharedCppLib2/platform.hpp>
 
 #define USERAUTH_WAIT_TIMEOUT 10000
@@ -68,17 +70,15 @@ void UpdateServiceStatus(DWORD state, DWORD checkpoint = 0, DWORD waitHint = 0) 
     }
 }
 
-enum class ConfirmType { NotFound, InsufficientLevel, HashMismatch };
-
-bool RequestUserConfirmation(const ProcessContext& context, ConfirmType type) {
+bool RequestUserConfirmation(const ProcessContext& context, AuthUIType type) {
     LOGT_LOCAL("RequestUserConfirmation");
 
-    static const wchar_t* typeStr[] = {L"NOTFOUND", L"INSUFFICIENTLEVEL", L"HASHMISMATCH"};
+    // static const wchar_t* typeStr[] = {L"NOTFOUND", L"INSUFFICIENTLEVEL", L"HASHMISMATCH"};
     static const wchar_t* levelStr[] = {L"USER", L"ADMIN", L"SYSTEM"};
     
     // 构建确认对话框命令行
     std::wstring commandLine = (platform::executable_dir() / L"AuthUI.exe").wstring()
-        + L" " + typeStr[static_cast<int>(type)]
+        + L" " + AuthUITypeStr[static_cast<int>(type)]
         + L" " + levelStr[static_cast<int>(context.requestedAuthLevel)]
         + L" \"" + context.program + L"\"";
 
@@ -205,14 +205,14 @@ bool CreateProcessInUserSession(const ProcessContext& context) {
             dirBack();
             return false;
         case AuthLevel::NotFound:
-            if (!RequestUserConfirmation(context, ConfirmType::NotFound)) {
+            if (!RequestUserConfirmation(context, AuthUIType::ConfirmNew)) {
                 dirBack();
                 return false;
             }
             auth::authlist.insert(context.program, context.requestedAuthLevel);
             break;
         case AuthLevel::InsufficientLevel:
-            if (!RequestUserConfirmation(context, ConfirmType::InsufficientLevel)) {
+            if (!RequestUserConfirmation(context, AuthUIType::ConfirmRaise)) {
                 dirBack();
                 return false;
             }
@@ -220,8 +220,14 @@ bool CreateProcessInUserSession(const ProcessContext& context) {
             auth::authlist.insert(context.program, context.requestedAuthLevel);
             break;
         case AuthLevel::HashMismatch:
-            dirBack();
-            return false;
+            if (!RequestUserConfirmation(context, AuthUIType::ConfirmHashRebuild)) {
+                dirBack();
+                return false;
+            }
+            // 用户确认，重新添加程序
+            auth::authlist.remove(context.program);
+            auth::authlist.insert(context.program, context.requestedAuthLevel);
+            break;
         default:
             break;
     }
