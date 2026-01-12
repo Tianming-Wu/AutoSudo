@@ -27,6 +27,7 @@ struct ProcessContext {
 
     DWORD sessionId = 0;  //目标会话ID
     bool useCurrentSession = true;  //是否使用当前会话
+    bool deleteAuth = false;  //是否删除授权
 
     AuthLevel requestedAuthLevel = AuthLevel::Admin;
 

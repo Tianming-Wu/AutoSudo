@@ -64,7 +64,7 @@ std::wstring ResolveExecutablePath(const std::wstring& commandLine) {
     return L""; // 未找到
 }
 
-int ExecuteCommand(const std::wstring& commandLine, AuthLevel authLevel = AuthLevel::Admin) {
+int ExecuteCommand(const std::wstring& commandLine, AuthLevel authLevel = AuthLevel::Admin, bool deleteAuth = false) {
     LOGT_LOCAL("ExecuteCommand");
     // 构建进程上下文
     ProcessContext context;
@@ -89,8 +89,9 @@ int ExecuteCommand(const std::wstring& commandLine, AuthLevel authLevel = AuthLe
 
     context.calledPath = currentDir;
 
-    // 设置认证级别
+    // 设置认证级别和删除标志
     context.requestedAuthLevel = authLevel;
+    context.deleteAuth = deleteAuth;
     
     // 获取当前会话ID
     context.sessionId = ::WTSGetActiveConsoleSessionId();
@@ -111,6 +112,7 @@ int ExecuteCommand(const std::wstring& commandLine, AuthLevel authLevel = AuthLe
     return 1;
 }
 
+// 主入口点
 #ifdef AUTOSUDO_GUI
 // GUI版本使用 wWinMain
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow) {
@@ -123,9 +125,13 @@ int wmain(int argc, wchar_t** argv) {
 
     // 初始化日志
     logt::claim("AutoSudo");
-    logt::file(platform::executable_dir()/"autosudo.log");
+    LOGT_LOCAL("main");
+    logt::addfile(platform::executable_dir()/"autosudo.log", true);
 
-    ///TODO: 为GUI版本关闭命令行日志输出
+    // GUI 版本不需要命令行输出，不使用 stdcout
+#ifndef AUTOSUDO_GUI
+    logt::stdcout(true, true);
+#endif
     
     int result = 0;
     
@@ -157,6 +163,7 @@ int wmain(int argc, wchar_t** argv) {
         AuthLevel authLevel = AuthLevel::Admin; // 默认管理员权限
         int commandStartIndex = 1; // 命令起始位置
         bool exec = true;
+        bool deleteAuth = false;
         
         std::wstring firstArg = argv[1];
         if (firstArg == L"--user") {
@@ -167,6 +174,10 @@ int wmain(int argc, wchar_t** argv) {
             commandStartIndex = 2;
         } else if (firstArg == L"--admin") {
             authLevel = AuthLevel::Admin;
+            commandStartIndex = 2;
+        } else if (firstArg == L"--delete") {
+            // --delete 标志，表示删除授权
+            deleteAuth = true;
             commandStartIndex = 2;
         } else if (firstArg == L"--help") {
             // ShowUsage();
@@ -213,7 +224,7 @@ int wmain(int argc, wchar_t** argv) {
                 }
                 
                 // 执行命令
-                result = ExecuteCommand(commandLine, authLevel);
+                result = ExecuteCommand(commandLine, authLevel, deleteAuth);
             }
         }
     }

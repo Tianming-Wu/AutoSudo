@@ -8,6 +8,7 @@ std::wstring ProcessContext::Serialize() const {
         calledPath + L"\n" +
         std::to_wstring(sessionId) + L"\n" +
         std::to_wstring(useCurrentSession) + L"\n" +
+        std::to_wstring(deleteAuth) + L"\n" +
         std::to_wstring(static_cast<int>(requestedAuthLevel)) + L"\n";
     
     for (const auto& env : environmentVariables) {
@@ -23,7 +24,7 @@ ProcessContext ProcessContext::Deserialize(const std::wstring& data) {
     std::wstringlist content(data, L"\n");
     
     // 检查最小字段数量
-    if (content.size() < 7) {
+    if (content.size() < 8) {
         throw std::runtime_error("Invalid serialized data: insufficient fields");
     }
     
@@ -51,6 +52,10 @@ ProcessContext ProcessContext::Deserialize(const std::wstring& data) {
     // 解析useCurrentSession
     std::wstring useSessionStr = content.vat(index++);
     context.useCurrentSession = (useSessionStr == L"1");
+    
+    // 解析deleteAuth
+    std::wstring deleteAuthStr = content.vat(index++);
+    context.deleteAuth = (deleteAuthStr == L"1");
     
     // 解析认证级别
     try {

@@ -61,11 +61,14 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
                   L"文件已被修改，是否允许执行更新后的程序？\n";
         break;
     case ConfirmDeletion:
-        title = L"AutoSudo 删除确认";
-        message = L"用户手动阻止请求通过：\n\n"
+        title = L"AutoSudo 权限删除";
+        message = L"删除程序授权：\n\n"
                   L"程序: " + programPath + L"\n\n"
-                  L"请求权限级别: " + authLevel + L"\n\n"
-                  L"是否删除授权？\n";
+                  L"授权级别: " + authLevel + L"\n\n"
+                  L"您可以：\n"
+                  L"  [是(Y)]     - 删除此授权\n"
+                  L"  [否(N)]     - 保留授权\n"
+                  L"  [取消(C)]   - 取消删除\n";
         break;
     
     default:
@@ -76,10 +79,33 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     
     // 设置对话框图标
     UINT iconType = MB_ICONQUESTION;
+    int result = 1; // 默认拒绝
     
-    // 显示确认对话框
-    int result = MessageBox(nullptr, message.c_str(), title.c_str(), 
-                           MB_YESNO | iconType | MB_SYSTEMMODAL);
+    if (uiType == ConfirmDeletion) {
+        // ConfirmDeletion 使用三按钮对话框
+        // MB_YESNOCANCEL: Yes(6), No(7), Cancel(2)
+        int msgResult = MessageBox(nullptr, message.c_str(), title.c_str(), 
+                                   MB_YESNOCANCEL | iconType | MB_SYSTEMMODAL);
+        
+        switch(msgResult) {
+            case IDYES:
+                result = static_cast<int>(AuthUIResult::Delete);  // 2 - 删除
+                break;
+            case IDNO:
+                result = static_cast<int>(AuthUIResult::Allow);   // 0 - 保留（允许通过）
+                break;
+            case IDCANCEL:
+                result = static_cast<int>(AuthUIResult::Deny);    // 1 - 拒绝（取消）
+                break;
+        }
+    } else {
+        // 其他类型使用两按钮对话框
+        int msgResult = MessageBox(nullptr, message.c_str(), title.c_str(), 
+                                   MB_YESNO | iconType | MB_SYSTEMMODAL);
+        
+        result = (msgResult == IDYES) ? static_cast<int>(AuthUIResult::Allow) 
+                                      : static_cast<int>(AuthUIResult::Deny);
+    }
 
-    return cleanup((result == IDYES) ? 0 : 1);
+    return cleanup(result);
 }

@@ -70,7 +70,7 @@ void UpdateServiceStatus(DWORD state, DWORD checkpoint = 0, DWORD waitHint = 0) 
     }
 }
 
-bool RequestUserConfirmation(const ProcessContext& context, AuthUIType type) {
+int RequestUserConfirmation(const ProcessContext& context, AuthUIType type) {
     LOGT_LOCAL("RequestUserConfirmation");
 
     // static const wchar_t* typeStr[] = {L"NOTFOUND", L"INSUFFICIENTLEVEL", L"HASHMISMATCH"};
@@ -87,14 +87,14 @@ bool RequestUserConfirmation(const ProcessContext& context, AuthUIType type) {
     HANDLE userToken = token::getUserToken(context);
     if(userToken == nullptr) {
         logt.error() << "Failed to get user token.";
-        return false;
+        return static_cast<int>(AuthUIResult::Deny);
     }
 
     DWORD targetSessionId = context.sessionId;
     if (!SetTokenInformation(userToken, TokenSessionId, &targetSessionId, sizeof(DWORD))) {
         logt.error() << "SetTokenInformation failed: " << platform::windows::TranslateLastError();
         CloseHandle(userToken);
-        return false;
+        return static_cast<int>(AuthUIResult::Deny);
     }
     
     STARTUPINFO si = {0};
@@ -106,7 +106,7 @@ bool RequestUserConfirmation(const ProcessContext& context, AuthUIType type) {
     if (!success) {
         logt.error() << "Failed to launch confirmation UI";
         CloseHandle(userToken);
-        return false;
+        return static_cast<int>(AuthUIResult::Deny);
     }
     
     // 等待用户响应
@@ -123,9 +123,8 @@ bool RequestUserConfirmation(const ProcessContext& context, AuthUIType type) {
     CloseHandle(pi.hThread);
     CloseHandle(userToken);
     
-    bool confirmed = (exitCode == 0);
-    logt.info() << "User confirmation result: " << (confirmed ? "ALLOWED" : "DENIED");
-    return confirmed;
+    logt.info() << "User confirmation result: " << exitCode;
+    return static_cast<int>(exitCode);
 }
 
 std::wstring MakeFullCommandLine(const ProcessContext& context) {
@@ -199,20 +198,38 @@ bool CreateProcessInUserSession(const ProcessContext& context) {
 
     AuthLevel authResult = auth::authlist.test(context.program, context.requestedAuthLevel);
 
+    // 如果设置了 deleteAuth 标志，询问用户是否删除授权
+    if (context.deleteAuth) {
+        int authUIResult = RequestUserConfirmation(context, AuthUIType::ConfirmDeletion);
+        if (authUIResult == static_cast<int>(AuthUIResult::Delete)) {
+            // 用户选择删除
+            logt.info() << "User confirmed deletion of: " << context.program;
+            auth::authlist.remove(context.program);
+            dirBack();
+            return true;  // 删除授权后返回true，不执行程序
+        } else if (authUIResult == static_cast<int>(AuthUIResult::Deny)) {
+            // 用户选择取消
+            logt.info() << "User cancelled deletion operation";
+            dirBack();
+            return false;
+        }
+        // authUIResult == AuthUIResult::Allow 时继续执行授权检查
+    }
+
     switch(authResult) {
         case AuthLevel::Invalid:
             logt.error() << "Invalid requested permission level, ignoring.";
             dirBack();
             return false;
         case AuthLevel::NotFound:
-            if (!RequestUserConfirmation(context, AuthUIType::ConfirmNew)) {
+            if (RequestUserConfirmation(context, AuthUIType::ConfirmNew) != static_cast<int>(AuthUIResult::Allow)) {
                 dirBack();
                 return false;
             }
             auth::authlist.insert(context.program, context.requestedAuthLevel);
             break;
         case AuthLevel::InsufficientLevel:
-            if (!RequestUserConfirmation(context, AuthUIType::ConfirmRaise)) {
+            if (RequestUserConfirmation(context, AuthUIType::ConfirmRaise) != static_cast<int>(AuthUIResult::Allow)) {
                 dirBack();
                 return false;
             }
@@ -220,7 +237,7 @@ bool CreateProcessInUserSession(const ProcessContext& context) {
             auth::authlist.insert(context.program, context.requestedAuthLevel);
             break;
         case AuthLevel::HashMismatch:
-            if (!RequestUserConfirmation(context, AuthUIType::ConfirmHashRebuild)) {
+            if (RequestUserConfirmation(context, AuthUIType::ConfirmHashRebuild) != static_cast<int>(AuthUIResult::Allow)) {
                 dirBack();
                 return false;
             }
@@ -417,7 +434,7 @@ DWORD WINAPI PipeListenerThread(LPVOID param) {
 
 void MainServiceLoop() {
     LOGT_LOCAL("MainServiceLoop");
-    logt.info() << "Service main loop started";
+    logt.info() << "Service main thread started";
 
     UpdateServiceStatus(SERVICE_RUNNING);
 
@@ -443,14 +460,14 @@ void MainServiceLoop() {
         pipeThread = nullptr;
     }
     
-    logt.info() << "Service main loop ended";
+    logt.info() << "Service main thread ended";
 }
 
 
 VOID WINAPI ServiceMain(DWORD argc, LPTSTR* argv) {
     LOGT_LOCAL("ServiceMain");
 
-    logt::file(platform::executable_dir()/"autosudo_service.log");
+    logt::addfile(platform::executable_dir()/"autosudo_service.log", true);
     logt::claim("ServiceMain");
 
     auth::authlist.load();
@@ -510,10 +527,10 @@ int wmain(int argc, wchar_t** argv) {
     logt::claim("ServiceMain");
     // 如果是控制台模式运行（调试用）
     if (argc > 1 && std::wstring(argv[1]) == L"--debug") {
-        logt::file("autosudo_service_debug.log");
+        logt::addfile("autosudo_service_debug.log", true);
         auth::authlist.load();
 
-        logt::setFilterLevel(LogLevel::l_DEBUG);
+        logt::setFilterLevel(LogLevel::Debug);
 
         logt.info() << "Running in debug mode";
         
@@ -524,7 +541,7 @@ int wmain(int argc, wchar_t** argv) {
         logt::shutdown();
         return 0;
     } else {
-        logt::file("autosudo_service.log");
+        logt::addfile("autosudo_service.log", true);
         
         // 服务模式
         wchar_t serviceName[] = L"AutoSudoService";
@@ -535,7 +552,7 @@ int wmain(int argc, wchar_t** argv) {
     
         if (!StartServiceCtrlDispatcher(serviceTable)) {
             logt::claim("AutoSudoService");
-            logt::file("autosudo_service_error.log");
+            logt::addfile("autosudo_service_error.log", true);
             logt.error() << "StartServiceCtrlDispatcher failed: " << platform::windows::TranslateLastError();
 
             logt::shutdown();
