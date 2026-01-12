@@ -4,6 +4,8 @@
 
 #include "auth_ui.hpp"
 
+#pragma comment(linker, "/manifestdependency:\"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
+
 LPWSTR* argv;
 int cleanup(const int &ret) {
     LocalFree(argv);
@@ -16,8 +18,6 @@ AuthUIType getType(const std::wstring& typestr) {
     }
     return AuthUIType::_sizetag;
 }
-
-#pragma comment(linker, "/manifestdependency:\"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow) {
     // 使用Per-Monitor V2 DPI感知（Windows 10 1703+）
