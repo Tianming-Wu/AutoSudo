@@ -106,6 +106,17 @@ int ExecuteCommand(const std::wstring& commandLine, AuthLevel authLevel = AuthLe
             logt.info() << "Server response: " << response;
             return 0;
         }
+    } else {
+        logt.error() << "Failed to connect to AutoSudo service.";
+
+        #ifdef AUTOSUDO_GUI
+        MessageBox(nullptr, 
+                  L"无法连接到 AutoSudo 服务。\n请确保服务已安装并正在运行。",
+                  L"AutoSudo 连接错误", 
+                  MB_OK | MB_ICONERROR);
+        #endif
+
+        return 1;
     }
     
     logt.error() << "Failed to execute command";
