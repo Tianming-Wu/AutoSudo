@@ -4,7 +4,10 @@
 
 #include <wtsapi32.h>
 
-#include "pipeclient.hpp"
+#include <libpipe.hpp>
+
+#include "protocol.hpp"
+// #include "pipeclient.hpp"
 #include "installer.hpp"
 
 #include <SharedCppLib2/logt.hpp>
@@ -98,24 +101,38 @@ int ExecuteCommand(const std::wstring& commandLine, AuthLevel authLevel = AuthLe
     context.useCurrentSession = true;
 
     // 连接服务并发送请求
-    PipeClient client;
-    if (client.Connect()) {
-        std::wstring request = context.Serialize();
-        if (client.SendRequest(request)) {
-            std::wstring response = client.ReadResponse();
+    // PipeClient client;
+
+    libpipe::pipe_client client(R"(\\.\pipe\AutoSudoPipe)");
+
+    if(client.waitForConnection(std::chrono::seconds(1))) {
+        logt.debug() << "Connected to AutoSudo service.";
+
+        if (client.write(std::bytearray::fromStdWString(context.Serialize())) != 0) {
+            std::wstring response = client.readAll().toStdWString();
             logt.info() << "Server response: " << response;
             return 0;
+        } else {
+            logt.error() << "Failed to send command to AutoSudo service.";
+            #ifdef AUTOSUDO_GUI
+            MessageBox(nullptr, 
+                    L"无法发送命令到 AutoSudo 服务。\n请联系开发者并提供日志。",
+                    L"AutoSudo 连接错误", 
+                    MB_OK | MB_ICONERROR);
+            #endif
+            return 1;
         }
+
     } else {
         logt.error() << "Failed to connect to AutoSudo service.";
-
+        logt.error() << "Reason: " << platform::windows::TranslateLastError();
+        
         #ifdef AUTOSUDO_GUI
         MessageBox(nullptr, 
                   L"无法连接到 AutoSudo 服务。\n请确保服务已安装并正在运行。",
                   L"AutoSudo 连接错误", 
                   MB_OK | MB_ICONERROR);
         #endif
-
         return 1;
     }
     

@@ -6,8 +6,10 @@
 #include <wtsapi32.h>
 #include <functional>
 
+#include <libpipe.hpp>
+
 #include "protocol.hpp"
-#include "pipeserver.hpp"
+// #include "pipeserver.hpp"
 #include "auth.hpp"
 #include "token.hpp"
 // #include "authlib.hpp"
@@ -181,16 +183,17 @@ bool CreateProcessInUserSession(const ProcessContext& context) {
     DWORD targetSessionId = context.sessionId;
     
     // 如果useCurrentSession为false或者sessionId无效，使用默认逻辑
+    // 此判断已经在调用处进行过一次，但这里再确认一次以防万一
     if (!context.useCurrentSession || targetSessionId == 0xFFFFFFFF) {
-        logt.info() << "Using default session handling";
+        logt.warn() << "Fallback to using default session handling";
         return CreateProcessWithContext(context); // 回退到原来的方法
     }
     
-    logt.info() << "Creating process in session: " << targetSessionId;
+    logt.debug() << "Creating process in session: " << targetSessionId;
     
     if (!context.calledPath.empty()) {
         if (SetCurrentDirectory(context.calledPath.c_str())) {
-            logt.info() << "Changed working directory to: " << context.calledPath;
+            logt.debug() << "Changed working directory to: " << context.calledPath;
         } else {
             logt.warn() << "Failed to change working directory to: " << context.calledPath;
         }
@@ -242,14 +245,17 @@ bool CreateProcessInUserSession(const ProcessContext& context) {
                 return false;
             }
             // 用户确认，重新添加程序
+            // （我偷懒了
             auth::authlist.remove(context.program);
             auth::authlist.insert(context.program, context.requestedAuthLevel);
             break;
         default:
+            logt.debug() << "Authorization check passed.";
             break;
     }
 
     AuthLevel finalLevel = (static_cast<int>(authResult) >= 0) ? authResult : context.requestedAuthLevel;
+    logt.debug() << "Final authorization level: " << static_cast<int>(finalLevel);
 
     HANDLE targetToken = nullptr;
 
@@ -267,6 +273,11 @@ bool CreateProcessInUserSession(const ProcessContext& context) {
     if(targetToken == nullptr) {
         // 获取令牌失败，退出
         // 日志已经在获取函数中输出，不再重复
+
+        // 草，失败了竟然里面没有输出
+        // 似乎是 LOGT_MODULE 的 bug，它是全局 static 对象，早于 logt 设置初始化，没有正确获取全局设置
+        logt.error() << "Failed to obtain token for the requested authorization level.";
+
         dirBack();
         return false;
     }
@@ -326,7 +337,7 @@ bool CreateProcessInUserSession(const ProcessContext& context) {
         
         // 尝试回退到没有用户环境的方式
         if (envBlock && (error == ERROR_INVALID_PARAMETER || error == ERROR_BAD_ENVIRONMENT)) {
-            logt.info() << "Retrying without user environment block...";
+            logt.debug() << "Retrying without user environment block...";
             success = CreateProcessAsUser(
                 targetToken,
                 nullptr,
@@ -367,11 +378,11 @@ bool CreateProcessInUserSession(const ProcessContext& context) {
     return success;
 }
 
-bool ProcessClientRequest(PipeServer& server) {
+bool ProcessClientRequest(libpipe::pipe_server_client& client) {
     LOGT_LOCAL("ProcessClientRequest");
 
     // 读取请求
-    std::wstring requestData = server.ReadRequest();
+    std::wstring requestData = client.readAll().toStdWString();
     if (requestData.empty()) {
         logt.error() << "Failed to read request from client or empty request";
         return false;
@@ -384,16 +395,18 @@ bool ProcessClientRequest(PipeServer& server) {
     // 根据上下文决定创建方式
     bool success = false;
     if (context.useCurrentSession && context.sessionId != 0xFFFFFFFF) {
+        logt.debug() << "using CreateProcessInUserSession";
         success = CreateProcessInUserSession(context);
     } else {
+        logt.debug() << "using CreateProcessWithContext";
         success = CreateProcessWithContext(context);
     }
     
     // 发送响应
     if (success) {
-        server.SendResponse(L"SUCCESS: Process created");
+        client.write(std::bytearray::fromStdWString(L"SUCCESS: Process created"));
     } else {
-        server.SendResponse(L"ERROR: Failed to create process");
+        client.write(std::bytearray::fromStdWString(L"ERROR: Failed to create process"));
     }
     
     return true;
@@ -403,23 +416,33 @@ DWORD WINAPI PipeListenerThread(LPVOID param) {
     logt::claim("PipeListenerThread");
     LOGT_LOCAL("PipeListenerThread");
     logt.info() << "Pipe listener thread started";
-    
+
+    libpipe::pipe_server server(R"(\\.\pipe\AutoSudoPipe)", libpipe::PermissionPresets::Everyone);
+
+    server.setPipeMode(libpipe::PipeMode::Message);
+    // Usually, 8KiB is enough for a single command.
+
+    if(!server.start()) {
+        logt.error() << "Failed to start pipe server";
+        return 1;
+    }
+
     while (!shouldStopPipeThread) {
-        PipeServer server;
-        
-        // 这个调用会阻塞，但我们可以通过外部事件来中断
-        if (server.StartNonBlocking()) {
-            logt.info() << "Client connected, processing request...";
+        if (server.waitForNextConnection(std::chrono::seconds(1))) {
+            logt.debug() << "Client connected.";
             
-            // 处理客户端请求
-            ProcessClientRequest(server);
+            auto client = server.queryNextConnection();
+
+            if(client.valid()) {
+                ProcessClientRequest(client);
+
+            } else {
+                logt.error() << "Failed to fetch client connection.";
+            }
             
             // 断开连接
-            DisconnectNamedPipe(server.GetPipeHandle());
-            logt.info() << "Client disconnected";
-        } else {
-            // 正常的非客户端连接状态，短暂休息
-            Sleep(100);
+            client.close();
+            logt.debug() << "Client disconnected";
         }
         
         // 检查停止标志
@@ -428,13 +451,13 @@ DWORD WINAPI PipeListenerThread(LPVOID param) {
         }
     }
     
-    logt.info() << "Pipe listener thread exiting";
+    logt.debug() << "Pipe listener thread exiting";
     return 0;
 }
 
 void MainServiceLoop() {
     LOGT_LOCAL("MainServiceLoop");
-    logt.info() << "Service main thread started";
+    logt.debug() << "Service main thread started";
 
     UpdateServiceStatus(SERVICE_RUNNING);
 
@@ -506,7 +529,7 @@ VOID WINAPI ServiceMain(DWORD argc, LPTSTR* argv) {
     serviceStatus.dwWaitHint = 0;
     SetServiceStatus(serviceStatusHandle, &serviceStatus);
     
-    logt.info() << "Service started successfully";
+    logt.debug() << "Service started successfully";
     
     // 主服务循环
     MainServiceLoop();
@@ -516,7 +539,7 @@ VOID WINAPI ServiceMain(DWORD argc, LPTSTR* argv) {
     serviceStatus.dwCurrentState = SERVICE_STOPPED;
     SetServiceStatus(serviceStatusHandle, &serviceStatus);
     
-    logt.info() << "Service stopped";
+    logt.debug() << "Service stopped";
     logt::shutdown();
 }
 
@@ -528,11 +551,12 @@ int wmain(int argc, wchar_t** argv) {
     // 如果是控制台模式运行（调试用）
     if (argc > 1 && std::wstring(argv[1]) == L"--debug") {
         logt::addfile("autosudo_service_debug.log", true);
+        logt::stdcout(true, true); // Enable console logging
         auth::authlist.load();
 
         logt::setFilterLevel(LogLevel::Debug);
 
-        logt.info() << "Running in debug mode";
+        logt.debug() << "Running in debug mode";
         
         serviceStopEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
         MainServiceLoop();

@@ -17,27 +17,30 @@ add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/execution-charset:utf-8>")
 add_compile_definitions(LOGT_WCHAR_SUPPORT)
 
 find_package(SharedCppLib2 REQUIRED)
+find_package(libpipe REQUIRED)
 
 # add_library(authlib STATIC src/authlib.cpp)
 # target_link_libraries(authlib wintrust)
 add_library(auth STATIC src/auth.cpp)
-target_link_libraries(auth PRIVATE SharedCppLib2::basic SharedCppLib2::sha256 SharedCppLib2::platform)
+target_link_libraries(auth PRIVATE SharedCppLib2::basic SharedCppLib2::sha256 SharedCppLib2::platform libpipe::libpipe)
 
 add_library(protocol STATIC src/protocol.cpp)
 target_link_libraries(protocol PRIVATE SharedCppLib2::basic)
 
+# service version
 add_executable(AutoSudoSvc src/service_main.cpp src/pipeserver.cpp src/token.cpp)
-target_link_libraries(AutoSudoSvc protocol auth wtsapi32 userenv SharedCppLib2::logt SharedCppLib2::platform)
+target_link_libraries(AutoSudoSvc protocol auth wtsapi32 userenv SharedCppLib2::logt SharedCppLib2::platform libpipe::libpipe)
 
 # command-line version
-add_executable(AutoSudo src/main.cpp src/installer.cpp src/pipeclient.cpp)
-target_link_libraries(AutoSudo protocol wtsapi32 SharedCppLib2::basic SharedCppLib2::logt SharedCppLib2::platform)
+add_executable(AutoSudo src/client_main.cpp src/installer.cpp src/pipeclient.cpp)
+target_link_libraries(AutoSudo protocol wtsapi32 SharedCppLib2::basic SharedCppLib2::logt SharedCppLib2::platform libpipe::libpipe)
 
 # gui version
-add_executable(AutoSudoW src/main.cpp src/installer.cpp src/pipeclient.cpp)
-target_link_libraries(AutoSudoW protocol comctl32 wtsapi32 SharedCppLib2::basic SharedCppLib2::logt SharedCppLib2::platform)
+add_executable(AutoSudoW src/client_main.cpp src/installer.cpp src/pipeclient.cpp)
+target_link_libraries(AutoSudoW protocol comctl32 wtsapi32 SharedCppLib2::basic SharedCppLib2::logt SharedCppLib2::platform libpipe::libpipe)
 set_target_properties(AutoSudoW PROPERTIES WIN32_EXECUTABLE TRUE)
 target_compile_definitions(AutoSudoW PUBLIC AUTOSUDO_GUI)
 
+# auth ui
 add_executable(AuthUI src/auth_ui.cpp)
 set_target_properties(AuthUI PROPERTIES WIN32_EXECUTABLE TRUE)

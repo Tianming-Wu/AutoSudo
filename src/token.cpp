@@ -6,9 +6,9 @@
 
 namespace token {
 
-LOGT_MODULE("token");
-
 HANDLE getSystemToken(const ProcessContext& context) {
+    LOGT_LOCAL("getSystemToken");
+
     HANDLE systemToken = nullptr;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ALL_ACCESS, &systemToken)) {
         logt.error() << "OpenProcessToken failed: " << platform::windows::TranslateLastError();
@@ -28,6 +28,8 @@ HANDLE getSystemToken(const ProcessContext& context) {
 }
 
 HANDLE getUserToken(const ProcessContext& context) {
+    LOGT_LOCAL("getUserToken");
+
     HANDLE userToken = nullptr;
     if (!WTSQueryUserToken(context.sessionId, &userToken)) {
         logt.error() << "WTSQueryUserToken failed: " << platform::windows::TranslateLastError();
@@ -37,6 +39,8 @@ HANDLE getUserToken(const ProcessContext& context) {
 }
 
 HANDLE getAdminToken(const ProcessContext& context) {
+    LOGT_LOCAL("getAdminToken");
+
     HANDLE userToken = getUserToken(context);
 
     HANDLE elevatedToken = nullptr;
@@ -53,12 +57,17 @@ HANDLE getAdminToken(const ProcessContext& context) {
                           sizeof(elevationType), &size)) {
         if (elevationType == TokenElevationTypeLimited) {
             // 令牌是受限的，需要获取链接令牌（管理员权限）
+            logt.debug() << "Token is limited, trying to get linked elevated token.";
             HANDLE linkedToken = nullptr;
             DWORD linkedSize;
             if (GetTokenInformation(elevatedToken, TokenLinkedToken, &linkedToken, 
                                   sizeof(linkedToken), &linkedSize)) {
                 CloseHandle(elevatedToken);
                 elevatedToken = linkedToken;
+            } else {
+                logt.error() << "GetTokenInformation for linked token failed: " << platform::windows::TranslateLastError();
+                CloseHandle(elevatedToken);
+                elevatedToken = nullptr;
             }
         }
     }

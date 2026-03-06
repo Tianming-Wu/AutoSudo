@@ -104,7 +104,7 @@ void list::save() {
     ofs << std::endl;
     
     for(const auto& [path, data] : m_authlist) {
-        ofs << path.string() << "|" << std::to_string(static_cast<int>(data.level)) << "|" << data.sha.tohex() << std::endl;
+        ofs << path.string() << "|" << std::to_string(static_cast<int>(data.level)) << "|" << data.sha.toHex() << std::endl;
     }
     
     ofs.close();
