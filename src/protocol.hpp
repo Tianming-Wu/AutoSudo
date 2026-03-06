@@ -23,13 +23,18 @@ struct ProcessContext {
     std::wstringlist arguments;
     std::wstring workingDirectory;
     std::wstring calledPath;  //客户端调用路径
-    std::vector<std::wstring> environmentVariables;
 
     DWORD sessionId = 0;  //目标会话ID
     bool useCurrentSession = true;  //是否使用当前会话
     bool deleteAuth = false;  //是否删除授权
 
     AuthLevel requestedAuthLevel = AuthLevel::Admin;
+
+    bool inheritConsole = false; // 是否继承控制台
+    int ConsoleX, ConsoleY; // 控制台参数，用于 ConPTY
+
+    // Dynamic member
+    std::vector<std::wstring> environmentVariables;
 
     std::wstring Serialize() const;
     static ProcessContext Deserialize(const std::wstring& data);

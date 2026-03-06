@@ -9,7 +9,11 @@ std::wstring ProcessContext::Serialize() const {
         std::to_wstring(sessionId) + L"\n" +
         std::to_wstring(useCurrentSession) + L"\n" +
         std::to_wstring(deleteAuth) + L"\n" +
-        std::to_wstring(static_cast<int>(requestedAuthLevel)) + L"\n";
+        std::to_wstring(static_cast<int>(requestedAuthLevel)) + L"\n" +
+
+        (inheritConsole ? L"1\n" : L"0\n") +
+        std::to_wstring(ConsoleX) + L"\n" +
+        std::to_wstring(ConsoleY) + L"\n";
     
     for (const auto& env : environmentVariables) {
         result += env + L"\n";
@@ -24,7 +28,7 @@ ProcessContext ProcessContext::Deserialize(const std::wstring& data) {
     std::wstringlist content(data, L"\n");
     
     // 检查最小字段数量
-    if (content.size() < 8) {
+    if (content.size() < 11) {
         throw std::runtime_error("Invalid serialized data: insufficient fields");
     }
     
@@ -62,6 +66,16 @@ ProcessContext ProcessContext::Deserialize(const std::wstring& data) {
         context.requestedAuthLevel = static_cast<AuthLevel>(std::stoi(content.vat(index++)));
     } catch (...) {
         context.requestedAuthLevel = AuthLevel::Admin; // 默认值
+    }
+
+    // 解析控制台参数
+    context.inheritConsole = content.vat(index++) == L"1";
+    try {
+        context.ConsoleX = std::stoi(content.vat(index++));
+        context.ConsoleY = std::stoi(content.vat(index++));
+    } catch (...) {
+        context.ConsoleX = 0;
+        context.ConsoleY = 0;
     }
     
     // 解析环境变量（剩余的所有行）
