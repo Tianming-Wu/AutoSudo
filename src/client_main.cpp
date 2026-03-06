@@ -1,6 +1,9 @@
 #include <windows.h>
 #include <iostream>
 #include <string>
+#include <thread>
+#include <atomic>
+#include <array>
 
 #include <wtsapi32.h>
 
@@ -10,8 +13,13 @@
 // #include "pipeclient.hpp"
 #include "installer.hpp"
 
+#include "broker_protocol.hpp"
+
 #include <SharedCppLib2/logt.hpp>
 #include <SharedCppLib2/stringlist.hpp>
+#include <SharedCppLib2/arguments.hpp>
+
+#include "help_doc.hpp"
 
 #ifdef AUTOSUDO_GUI
     #pragma comment(linker, "/manifestdependency:\"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
@@ -95,49 +103,316 @@ int ExecuteCommand(const std::wstring& commandLine, AuthLevel authLevel = AuthLe
     // 设置认证级别和删除标志
     context.requestedAuthLevel = authLevel;
     context.deleteAuth = deleteAuth;
+
+    // 配置 ConPTY 参数
+    #ifndef AUTOSUDO_GUI
+    context.inheritConsole = true; // 继承当前控制台
     
+    // 设置控制台为 UTF-8 模式以正确显示 ConPTY 输出
+    SetConsoleCP(CP_UTF8);
+    SetConsoleOutputCP(CP_UTF8);
+    
+    // 注意：不修改控制台模式标志，保持 Windows Terminal 的原有设置
+    // Windows Terminal + PowerShell 7 已经正确配置了虚拟终端处理
+    
+    // 获取当前控制台窗口大小
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
+        context.ConsoleX = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+        context.ConsoleY = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+    } else {
+        // 默认值
+        context.ConsoleX = 80;
+        context.ConsoleY = 25;
+    }
+
+    #endif
+
     // 获取当前会话ID
     context.sessionId = ::WTSGetActiveConsoleSessionId();
     context.useCurrentSession = true;
 
-    // 连接服务并发送请求
-    // PipeClient client;
-
     libpipe::pipe_client client(R"(\\.\pipe\AutoSudoPipe)");
 
-    if(client.waitForConnection(std::chrono::seconds(1))) {
-        logt.debug() << "Connected to AutoSudo service.";
-
-        if (client.write(std::bytearray::fromStdWString(context.Serialize())) != 0) {
-            std::wstring response = client.readAll().toStdWString();
-            logt.info() << "Server response: " << response;
-            return 0;
-        } else {
-            logt.error() << "Failed to send command to AutoSudo service.";
-            #ifdef AUTOSUDO_GUI
-            MessageBox(nullptr, 
-                    L"无法发送命令到 AutoSudo 服务。\n请联系开发者并提供日志。",
-                    L"AutoSudo 连接错误", 
-                    MB_OK | MB_ICONERROR);
-            #endif
-            return 1;
-        }
-
-    } else {
+    if(!client.waitForConnection(std::chrono::seconds(1))) {
         logt.error() << "Failed to connect to AutoSudo service.";
         logt.error() << "Reason: " << platform::windows::TranslateLastError();
-        
         #ifdef AUTOSUDO_GUI
-        MessageBox(nullptr, 
+        MessageBox(nullptr,
                   L"无法连接到 AutoSudo 服务。\n请确保服务已安装并正在运行。",
-                  L"AutoSudo 连接错误", 
+                  L"AutoSudo 连接错误",
                   MB_OK | MB_ICONERROR);
         #endif
         return 1;
     }
-    
-    logt.error() << "Failed to execute command";
+
+    logt.debug() << "Connected to AutoSudo service.";
+
+    if (client.write(std::bytearray::fromStdWString(context.Serialize())) == 0) {
+        logt.error() << "Failed to send command to AutoSudo service.";
+        #ifdef AUTOSUDO_GUI
+        MessageBox(nullptr,
+                L"无法发送命令到 AutoSudo 服务。\n请联系开发者并提供日志。",
+                L"AutoSudo 连接错误",
+                MB_OK | MB_ICONERROR);
+        #endif
+        return 1;
+    }
+
+    if(!client.waitForReadyRead(std::chrono::seconds(30))) {
+        if(client.broken()) {
+            logt.error() << "Connection to service was broken.";
+        } else {
+            logt.warn() << "Wait for response from service timed out.";
+        }
+        return 1;
+    }
+
+    std::bytearray firstPacket = client.readAll();
+    if(firstPacket.empty()) {
+        logt.error() << "Empty response from service.";
+        return 1;
+    }
+
+    std::wstring firstPacketW = firstPacket.toStdWString();
+    if(firstPacketW.starts_with(L"SUCCESS:") || firstPacketW.starts_with(L"ERROR:")) {
+        logt.info() << "Server response: " << firstPacketW;
+        return firstPacketW.starts_with(L"SUCCESS:") ? 0 : 1;
+    }
+
+    #ifdef AUTOSUDO_GUI
+    logt.error() << "GUI mode received broker handshake payload unexpectedly.";
     return 1;
+    #else
+    std::string token = firstPacket.toStdString();
+    if(!client.waitForReadyRead(std::chrono::seconds(5))) {
+        logt.error() << "Broker message pipe name was not returned by service.";
+        return 1;
+    }
+
+    std::string brokerMsgPipe = client.readAll().toStdString();
+
+    if(brokerMsgPipe.empty()) {
+        logt.error() << "Received empty broker message pipe name.";
+        return 1;
+    }
+
+    // 确认已接收到 broker 信息，防止服务端过早关闭
+    client.acknowledge();
+
+    libpipe::pipe_client brokerMsgClient(brokerMsgPipe);
+    if(!brokerMsgClient.waitForConnection(std::chrono::seconds(5))) {
+        logt.error() << "Failed to connect to broker message pipe: " << brokerMsgPipe;
+        return 1;
+    }
+
+    logt.debug() << "Connected to broker message pipe.";
+
+    if (brokerMsgClient.write(std::bytearray::fromStdWString(context.Serialize())) == 0) {
+        logt.error() << "Failed to send ProcessContext to broker.";
+        return 1;
+    }
+
+    if (!brokerMsgClient.waitForReadyRead(std::chrono::seconds(5))) {
+        logt.error() << "Broker did not acknowledge context in time.";
+        return 1;
+    }
+
+    BrokerResponse br = brokerMsgClient.readAll().convert_to<BrokerResponse>();
+    if(br != BrokerResponse::Success) {
+        logt.error() << "Broker rejected context, response code: " << static_cast<uint32_t>(br);
+        return 1;
+    }
+
+    // 读取输入管道名称
+    if (!brokerMsgClient.waitForReadyRead(std::chrono::seconds(5))) {
+        logt.error() << "Broker did not provide input stream pipe name.";
+        return 1;
+    }
+
+    std::string inputPipeName = brokerMsgClient.readAll().toStdString();
+    if(inputPipeName.empty()) {
+        logt.error() << "Broker provided empty input stream pipe name.";
+        return 1;
+    }
+
+    // 读取输出管道名称
+    if (!brokerMsgClient.waitForReadyRead(std::chrono::seconds(5))) {
+        logt.error() << "Broker did not provide output stream pipe name.";
+        return 1;
+    }
+
+    std::string outputPipeName = brokerMsgClient.readAll().toStdString();
+    if(outputPipeName.empty()) {
+        logt.error() << "Broker provided empty output stream pipe name.";
+        return 1;
+    }
+
+    // 连接到输入管道（客户端写入，broker 读取）
+    libpipe::pipe_client inputClient(inputPipeName);
+    if(!inputClient.waitForConnection(std::chrono::seconds(5))) {
+        logt.error() << "Failed to connect to broker input stream pipe: " << inputPipeName;
+        return 1;
+    }
+
+    // 连接到输出管道（broker 写入，客户端读取）
+    libpipe::pipe_client outputClient(outputPipeName);
+    if(!outputClient.waitForConnection(std::chrono::seconds(5))) {
+        logt.error() << "Failed to connect to broker output stream pipe: " << outputPipeName;
+        return 1;
+    }
+
+    if (!brokerMsgClient.waitForReadyRead(std::chrono::seconds(10))) {
+        logt.error() << "Broker did not send process start status.";
+        return 1;
+    }
+
+    BrokerResponse startResponse = brokerMsgClient.readAll().convert_to<BrokerResponse>();
+    if(startResponse != BrokerResponse::Success) {
+        logt.error() << "Process start failed in broker, response code: " << static_cast<uint32_t>(startResponse);
+        return 1;
+    }
+
+    logt.debug() << "ConPTY stream established.";
+
+    std::atomic_bool running { true };
+    std::atomic_int processExitCode { 1 };
+
+    HANDLE hIn = GetStdHandle(STD_INPUT_HANDLE);
+    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+
+    // 保存原始控制台模式
+    DWORD originalInMode = 0, originalOutMode = 0;
+    GetConsoleMode(hIn, &originalInMode);
+    GetConsoleMode(hOut, &originalOutMode);
+
+    // RAII 类确保控制台模式总是被恢复，即使程序崩溃
+    struct ConsoleModeGuard {
+        HANDLE hIn, hOut;
+        DWORD originalInMode, originalOutMode;
+        
+        ConsoleModeGuard(HANDLE in, HANDLE out, DWORD inMode, DWORD outMode) 
+            : hIn(in), hOut(out), originalInMode(inMode), originalOutMode(outMode) {}
+        
+        ~ConsoleModeGuard() {
+            SetConsoleMode(hIn, originalInMode);
+            SetConsoleMode(hOut, originalOutMode);
+        }
+    } consoleModeGuard(hIn, hOut, originalInMode, originalOutMode);
+
+    // 设置为原始模式：禁用行缓冲、回显、处理和鼠标输入，但保留其他标志
+    DWORD rawInMode = originalInMode;
+    rawInMode &= ~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT | ENABLE_MOUSE_INPUT | ENABLE_WINDOW_INPUT);
+    rawInMode |= ENABLE_VIRTUAL_TERMINAL_INPUT;
+    
+    DWORD rawOutMode = originalOutMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN;
+    
+    SetConsoleMode(hIn, rawInMode);
+    SetConsoleMode(hOut, rawOutMode);
+
+    logt.debug() << "Console mode set: input=" << std::hex << rawInMode << " output=" << rawOutMode << std::dec;
+
+    auto sendThread = std::thread([&]() {
+        std::array<char, 4096> inputBuffer{};
+        logt.debug() << "Input thread started.";
+        while (running) {
+            // 直接使用 ReadFile 读取标准输入（在原始模式下会立即返回可用数据）
+            DWORD bytesRead = 0;
+            if (ReadFile(hIn, inputBuffer.data(), DWORD(inputBuffer.size()), &bytesRead, nullptr)) {
+                if (bytesRead > 0) {
+                    logt.debug() << "Read " << bytesRead << " bytes from stdin.";
+                    if (inputClient.write(std::bytearray(inputBuffer.data(), bytesRead)) == 0) {
+                        logt.warn() << "Write to broker input stream failed.";
+                        // 写入失败时检查连接是否断开
+                        if (inputClient.broken()) {
+                            logt.warn() << "Input stream pipe broken (input thread).";
+                        }
+                        running = false;
+                        break;
+                    }
+                    logt.debug() << "Sent " << bytesRead << " bytes to broker.";
+                }
+            } else {
+                DWORD err = GetLastError();
+                if (err != ERROR_BROKEN_PIPE && running) {
+                    logt.warn() << "Read stdin failed: " << platform::windows::TranslateError(err);
+                }
+                break;
+            }
+        }
+        logt.debug() << "Input thread exiting.";
+    });
+
+    auto recvThread = std::thread([&]() {
+        logt.debug() << "Output thread started.";
+        while (running) {
+            // 阻塞式读取，数据一到就返回，无轮询延迟
+            std::bytearray output = outputClient.read(4096);
+            if(output.empty()) {
+                if (outputClient.broken()) {
+                    logt.debug() << "Output stream pipe closed (output thread).";
+                }
+                break;
+            }
+
+            logt.debug() << "Received " << output.rawSize() << " bytes from broker, writing to stdout.";
+            DWORD bytesWritten = 0;
+            const void* dataPtr = output.rawData();
+            const DWORD dataSize = static_cast<DWORD>(output.rawSize());
+            
+            if (!WriteFile(hOut, dataPtr, dataSize, &bytesWritten, nullptr)) {
+                DWORD err = GetLastError();
+                logt.error() << "WriteFile to stdout failed: " << platform::windows::TranslateError(err);
+                break;
+            }
+            logt.debug() << "Wrote " << bytesWritten << " bytes to stdout.";
+        }
+        running = false;
+        logt.debug() << "Output thread exiting.";
+    });
+
+    auto msgThread = std::thread([&]() {
+        logt.debug() << "Control thread started.";
+        while (running) {
+            // 阻塞式读取控制消息
+            std::bytearray msg = brokerMsgClient.readAll();
+            if(msg.empty()) {
+                if (brokerMsgClient.broken()) {
+                    logt.debug() << "Broker message pipe closed (control thread).";
+                }
+                break;
+            }
+
+            logt.debug() << "Received control message of size " << msg.rawSize();
+            if(msg.rawSize() == sizeof(uint32_t)) {
+                processExitCode = static_cast<int>(msg.convert_to<uint32_t>());
+                logt.debug() << "Received process exit code: " << processExitCode.load();
+                break;
+            }
+        }
+        running = false;
+        logt.debug() << "Control thread exiting.";
+    });
+
+    msgThread.join();
+    running = false;
+
+    // 关闭管道以解除 recvThread 的阻塞式 read()
+    inputClient.close();
+    outputClient.close();
+    brokerMsgClient.close();
+
+    // 取消 sendThread 中阻塞的 ReadFile(hIn) 控制台读取
+    CancelSynchronousIo(sendThread.native_handle());
+
+    sendThread.join();
+    recvThread.join();
+
+    // 控制台模式由 RAII guard 自动恢复
+
+    logt.info() << "Process exited with code: " << processExitCode.load();
+    return processExitCode.load();
+    #endif
 }
 
 // 主入口点
@@ -150,6 +425,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
 // 命令行版本使用 wmain  
 int wmain(int argc, wchar_t** argv) {
 #endif
+    std::warguments args(argc, argv);
+
 
     // 初始化日志
     logt::claim("AutoSudo");
@@ -163,97 +440,61 @@ int wmain(int argc, wchar_t** argv) {
     
     int result = 0;
     
-    if (argc < 2) {
-#ifdef AUTOSUDO_GUI
-        MessageBox(nullptr, 
-                  L"用法: AutoSudoW [权限选项] <命令>\n\n"
-                  L"权限选项:\n"
-                  L"  --user    用户权限\n"  
-                  L"  --admin   管理员权限 (默认)\n"
-                  L"  --system  SYSTEM权限\n\n"
-                  L"示例:\n"
-                  L"  AutoSudoW notepad\n"
-                  L"  AutoSudoW --user cmd",
-                  L"AutoSudoW - 帮助", 
-                  MB_OK | MB_ICONINFORMATION);
-#else
-        std::wcout << L"用法: AutoSudo [权限选项] <命令>" << std::endl;
-        std::wcout << L"权限选项:" << std::endl;
-        std::wcout << L"  --user    用户权限" << std::endl;
-        std::wcout << L"  --admin   管理员权限 (默认)" << std::endl;
-        std::wcout << L"  --system  SYSTEM权限" << std::endl;
-        std::wcout << L"示例:" << std::endl;
-        std::wcout << L"  AutoSudo notepad" << std::endl;
-        std::wcout << L"  AutoSudo --user cmd" << std::endl;
-#endif
-        result = 1;
-    } else {
-        AuthLevel authLevel = AuthLevel::Admin; // 默认管理员权限
-        int commandStartIndex = 1; // 命令起始位置
-        bool exec = true;
-        bool deleteAuth = false;
-        
-        std::wstring firstArg = argv[1];
-        if (firstArg == L"--user") {
-            authLevel = AuthLevel::User;
-            commandStartIndex = 2;
-        } else if (firstArg == L"--system") {
-            authLevel = AuthLevel::System;
-            commandStartIndex = 2;
-        } else if (firstArg == L"--admin") {
-            authLevel = AuthLevel::Admin;
-            commandStartIndex = 2;
-        } else if (firstArg == L"--delete") {
-            // --delete 标志，表示删除授权
-            deleteAuth = true;
-            commandStartIndex = 2;
-        } else if (firstArg == L"--help") {
-            // ShowUsage();
-            logt::shutdown();
-            return 0;
-        } else if (firstArg == L"--install") {
-            result = svc::InstallService() ? 0 : 1;
-            commandStartIndex = 2;
-            exec = false;
-        } else if (firstArg == L"--uninstall") {
-            result = svc::UninstallService() ? 0 : 1;
-            commandStartIndex = 2;
-            exec = false;
-        } else if (firstArg == L"--start") {
-            result = svc::_StartService() ? 0 : 1;
-            commandStartIndex = 2;
-            exec = false;
-        } else if (firstArg == L"--stop") {
-            result = svc::_StopService() ? 0 : 1;
-            commandStartIndex = 2;
-            exec = false;
-        }
+    if (args.empty()) {
+        show_help();
+        logt::exit(1);
+    }
 
-        // 执行命令模式
-        if(exec) {
-            if (commandStartIndex >= argc) {
-                if (commandStartIndex == 2) { // 有权限参数但没有命令
-                    std::wcout << L"Error: No command specified after permission flag" << std::endl;
-                    result = 1;
-                } else {
-                    result = 1;
-                }
-            } else {
-                // 构建命令行
-                std::wstring commandLine;
-                for (int i = commandStartIndex; i < argc; ++i) {
-                    if (i > commandStartIndex) commandLine += L" ";
-                    // 处理参数中的空格
-                    if (std::wstring(argv[i]).find(L' ') != std::wstring::npos) {
-                        commandLine += L"\"" + std::wstring(argv[i]) + L"\"";
-                    } else {
-                        commandLine += argv[i];
-                    }
-                }
-                
-                // 执行命令
-                result = ExecuteCommand(commandLine, authLevel, deleteAuth);
-            }
+    if (args.addHelp(show_help)) {
+        logt::exit(0);
+    }
+
+    AuthLevel authLevel = AuthLevel::Admin; // 默认管理员权限
+    std::wstring commandLine;
+    bool exec = true;
+    bool deleteAuth = false;
+
+    if(args.addFlag(L"debug")) {
+        logt::setFilterLevel(LogLevel::Debug);
+    }
+
+    if (args.addFlag(L"user")) {
+        authLevel = AuthLevel::User;
+        commandLine = args.anyAfter(L"user");
+    } else if (args.addFlag(L"system")) {
+        authLevel = AuthLevel::System;
+        commandLine = args.anyAfter(L"system");
+    } else if (args.addFlag(L"admin")) {
+        authLevel = AuthLevel::Admin;
+        commandLine = args.anyAfter(L"admin");
+    } else if (args.addFlag(L"delete")) {
+        // --delete 标志，表示删除授权
+        deleteAuth = true;
+        commandLine = args.anyAfter(L"delete");
+    }
+    
+    else if (args.addFlag(L"install")) {
+        result = svc::InstallService() ? 0 : 1;
+        exec = false;
+    } else if (args.addFlag(L"uninstall")) {
+        result = svc::UninstallService() ? 0 : 1;
+        exec = false;
+    } else if (args.addFlag(L"start")) {
+        result = svc::_StartService() ? 0 : 1;
+        exec = false;
+    } else if (args.addFlag(L"stop")) {
+        result = svc::_StopService() ? 0 : 1;
+        exec = false;
+    }
+
+    // 执行命令模式
+    if(exec) {
+        if (commandLine.empty()) {
+            std::wcout << L"Error: No command specified after permission flag" << std::endl;
+            result = 1;
+        } else {
+            // 执行命令
+            result = ExecuteCommand(commandLine, authLevel, deleteAuth);
         }
     }
 

@@ -1,5 +1,5 @@
 #pragma once
-#include <windows.h>
+#include <SharedCppLib2/platform_windows.hpp>
 #include <userenv.h>
 #include <string>
 

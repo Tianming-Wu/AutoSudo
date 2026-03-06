@@ -15,147 +15,106 @@
 PSECURITY_DESCRIPTOR CreatePipeSecurity();
 std::wstring MakeFullCommandLine(const ProcessContext& context);
 
-Broker::Broker()
+Broker::Broker(const std::string& pipeName, const std::string &inputStreamName, const std::string &outputStreamName, const std::bytearray& token)
+    : m_name(pipeName), m_inputStreamName(inputStreamName), m_outputStreamName(outputStreamName), m_token(token)
+    , msgServer(pipeName, libpipe::PermissionPresets::Everyone)
+    , inputStreamServer(inputStreamName, libpipe::PermissionPresets::Everyone)
+    , outputStreamServer(outputStreamName, libpipe::PermissionPresets::Everyone)
 {
+    msgServer.setPipeMode(libpipe::PipeMode::Message);
+    // Stream pipes use byte mode (default)
+
+    msgServer.setMaxClients(1);
+    inputStreamServer.setMaxClients(1);
+    outputStreamServer.setMaxClients(1);
 }
 
 Broker::~Broker()
 {
-    if(hpipe != INVALID_HANDLE_VALUE) {
-        CloseHandle(hpipe);
+    if (msgServer.active()) {
+        msgServer.stop();
+    }
+    if (inputStreamServer.active()) {
+        inputStreamServer.stop();
+    }
+    if (outputStreamServer.active()) {
+        outputStreamServer.stop();
     }
 }
 
-int Broker::Start(const std::wstring &pipeName, const std::bytearray& token)
+int Broker::Run()
 {
-    LOGT_LOCAL("Broker::Start");
+    LOGT_LOCAL("Broker::Run");
 
-    // Store the value
-    m_name = pipeName;
-    m_token = token;
+    if(!msgServer.start()) {
+        logt.fatal() << "Failed to start pipe server";
+        return 1;
+    }
 
-    ProcessContext pc;
+    if(!inputStreamServer.start()) {
+        logt.fatal() << "Failed to start input stream pipe server";
+        return 1;
+    }
 
-    if(!Init()) return GetLastError();
+    if(!outputStreamServer.start()) {
+        logt.fatal() << "Failed to start output stream pipe server";
+        return 1;
+    }
+    
+    if(msgServer.waitForNextConnection(std::chrono::seconds(1))) {
+    
+        auto client = msgServer.queryNextConnection();
 
-    // Start the pipe for a single time
-    // Step 1: handshake with the client to get the process context information
-    if(Wait()) {
-        // Verify the token
-        std::bytearray recv_token = Receive();
+        if(!client.valid()) {
+            logt.fatal() << "Failed to fetch client connection.";
+            return 1;
+        };
 
-        if(recv_token != m_token) {
-            logt.error() << "Received invalid token from client, closing connection.";
-            return -1;
-        }
+        if(client.waitForReadyRead(std::chrono::milliseconds(500))) {
+            ProcessContext context;
+            context = ProcessContext::Deserialize(client.readAll().toStdWString());
+            logt.debug() << "Received command: " << context.program << ", args: " << context.arguments.xjoin();
 
-        // Response the client to get the process context information
+            // notify client to be ready for later streamed connection
+            client.write(std::bytearray(BrokerResponse::Success));
 
-        Send(std::bytearray(B(0x01))); // 0x01 means handshake successful
+            // tell the client about the stream pipe names (input and output)
+            client.write(std::bytearray(m_inputStreamName));
+            client.write(std::bytearray(m_outputStreamName));
 
-        if(Wait()) { // wait for another client response
-            std::bytearray context_data = Receive();
-            pc = ProcessContext::Deserialize(
-                std::wstring(reinterpret_cast<const wchar_t*>(context_data.rawData()),
-                    (context_data.rawSize() / sizeof(wchar_t)))
-            );
+            // client must be moved and cannot be copied.
+            return RunProcess(std::move(client), context);
         } else {
-            logt.error() << "Failed to receive process context from client.";
-            return GetLastError();
+            logt.error() << "Client did not send data within timeout.";
+            return 1;
         }
     } else {
-        logt.error() << "Failed to wait for client connection.";
-        return GetLastError();
+        logt.error() << "Client did not connect within timeout.";
+        return 1;
     }
-    
-    return RunProcess(pc);
+
+    return 0;
 }
 
-bool Broker::Init()
-{
-    LOGT_LOCAL("Broker::Init");
-
-    PSECURITY_DESCRIPTOR sd = CreatePipeSecurity();
-    SECURITY_ATTRIBUTES sa = {0};
-    sa.nLength = sizeof(SECURITY_ATTRIBUTES);
-    sa.lpSecurityDescriptor = sd;
-    sa.bInheritHandle = FALSE;
-
-    hpipe = CreateNamedPipe(
-        m_name.c_str(),
-        PIPE_ACCESS_DUPLEX,
-        PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
-        1, // Only allow a single client to connect
-        BUFFER_SIZE,
-        BUFFER_SIZE,
-        NMPWAIT_USE_DEFAULT_WAIT,
-        sd ? &sa : nullptr  // 使用安全属性
-    );
-
-    if (sd) {
-        LocalFree(sd);
-    }
-    
-    if (hpipe == INVALID_HANDLE_VALUE) {
-        logt.error() << "CreateNamedPipe failed: " << platform::windows::TranslateLastError();
-        return false;
-    }
-    
-    logt.debug() << "Named pipe created successfully: " << m_name;
-
-    return true;
-}
-
-bool Broker::Wait()
-{
-    LOGT_LOCAL("Broker::Wait");
-
-    BOOL connected = ConnectNamedPipe(hpipe, nullptr);
-    if (!connected) {
-        DWORD error = GetLastError();
-        if (error == ERROR_PIPE_CONNECTED) {
-            logt.info() << "Client already connected";
-            return true;
-        } else {
-            logt.error() << "ConnectNamedPipe failed: " << platform::windows::TranslateError(error);
-            CloseHandle(hpipe);
-            hpipe = INVALID_HANDLE_VALUE;
-            return false;
-        }
-    }
-    
-    return true;
-}
-
-std::bytearray Broker::Receive()
-{
-    LOGT_LOCAL("Broker::Receive");
-    wchar_t buffer[BUFFER_SIZE];
-    DWORD bytesRead;
-
-    if (!ReadFile(hpipe, buffer, BUFFER_SIZE * sizeof(wchar_t), &bytesRead, nullptr)) {
-        logt.error() << "ReadFile failed: " << platform::windows::TranslateLastError();
-        return std::bytearray();
-    }
-
-    // Return the received data as a bytearray
-    return std::bytearray(PCB(buffer), bytesRead);
-}
-
-size_t Broker::Send(const std::bytearray &data)
-{
-    LOGT_LOCAL("Broker::Send");
-    DWORD bytesWritten;
-    if (!WriteFile(hpipe, data.rawData(), DWORD(data.rawSize()), &bytesWritten, nullptr)) {
-        logt.error() << "WriteFile failed: " << platform::windows::TranslateLastError();
-        return 0;
-    }
-    return bytesWritten;
-}
-
-int Broker::RunProcess(const ProcessContext &pc)
+int Broker::RunProcess(libpipe::pipe_server_client&& msgClient, const ProcessContext &pc)
 {
     LOGT_LOCAL("Broker::RunProcess");
+
+    // 等待客户端连接到输入管道
+    if(!inputStreamServer.waitForNextConnection(std::chrono::seconds(1))) {
+        logt.error() << "Client did not connect to input stream pipe within time limit.";
+        return 1;
+    }
+
+    auto inputClient = inputStreamServer.queryNextConnection();
+
+    // 等待客户端连接到输出管道
+    if(!outputStreamServer.waitForNextConnection(std::chrono::seconds(1))) {
+        logt.error() << "Client did not connect to output stream pipe within time limit.";
+        return 1;
+    }
+
+    auto outputClient = outputStreamServer.queryNextConnection();
 
     // 1) 创建管道：ConPTY 输入/输出
     SECURITY_ATTRIBUTES sa{ sizeof(sa), nullptr, TRUE };
@@ -170,7 +129,8 @@ int Broker::RunProcess(const ProcessContext &pc)
     
     if (FAILED(hr)) {
         logt.error() << "CreatePseudoConsole failed: " << hr;
-        Send(std::bytearray(B(0x03))); // 0x03 ConPTY 创建失败
+        msgClient.write(std::bytearray(BrokerResponse::ConPTYCreationFailed));
+
         CloseHandle(inRead);
         CloseHandle(inWrite);
         CloseHandle(outRead);
@@ -209,7 +169,7 @@ int Broker::RunProcess(const ProcessContext &pc)
         // 说明用户发送给服务和 Broker 的 SessionId 不一致，拒绝执行。
         logt.error() << "Session ID mismatch: active session is " << WTSGetActiveConsoleSessionId()
                      << " but got " << targetSessionId << " from client. Refusing to run process.";
-        Send(std::bytearray(B(0x02))); // 0x02 means session ID mismatch
+        msgClient.write(std::bytearray(BrokerResponse::SessionIDMismatch));
         return ERROR_ACCESS_DENIED;
     }
 
@@ -254,7 +214,7 @@ int Broker::RunProcess(const ProcessContext &pc)
 
     if (!success) {
         logt.error() << "CreateProcessW failed: " << platform::windows::TranslateLastError();
-        Send(std::bytearray(B(0x02))); // 0x02 启动失败
+        msgClient.write(std::bytearray(BrokerResponse::ProcessStartFailed));
         ClosePseudoConsole(hPC);
         CloseHandle(inWrite);
         CloseHandle(outRead);
@@ -265,52 +225,108 @@ int Broker::RunProcess(const ProcessContext &pc)
 
     // 5) broker 负责 IO 转发
     // 先返回 0x00 告诉客户端进程启动成功。
-    Send(std::bytearray(B(0x00)));
+    msgClient.write(std::bytearray(BrokerResponse::Success));
+
+    std::atomic_bool running { true };
 
     // IO 转发循环（双向异步）
-    std::thread inputThread([this]() {
-        // Client -> Broker -> ConPTY
-        char buffer[4096];
-        while (true) {
-            std::bytearray data = Receive();
-            if (data.empty()) break;
+    std::thread inputThread([&]() {
+        // Client -> Broker -> ConPTY (阻塞式读取，无轮询延迟)
+        logt.debug() << "Input forwarding thread started.";
+        while (running) {
+            std::bytearray data = inputClient.read(4096);
+            if (data.empty()) {
+                if (inputClient.broken()) {
+                    logt.debug() << "Input stream pipe closed (input forward thread).";
+                }
+                break;
+            }
             
+            logt.debug() << "Received " << data.rawSize() << " bytes from client, forwarding to ConPTY.";
             DWORD written;
-            WriteFile(inWrite, data.rawData(), DWORD(data.rawSize()), &written, nullptr);
+            const void* dataPtr = data.rawData();
+            const DWORD dataSize = static_cast<DWORD>(data.rawSize());
+            
+            if (!WriteFile(inWrite, dataPtr, dataSize, &written, nullptr)) {
+                DWORD err = GetLastError();
+                if (running) {
+                    logt.error() << "WriteFile to ConPTY failed: " << platform::windows::TranslateError(err);
+                }
+                break;
+            }
+            logt.debug() << "Wrote " << written << " bytes to ConPTY.";
         }
+        logt.debug() << "Input forwarding thread exiting.";
     });
 
-    std::thread outputThread([this]() {
+    std::thread outputThread([&]() {
         // ConPTY -> Broker -> Client
+        logt.debug() << "Output forwarding thread started.";
         char buffer[4096];
         DWORD read;
-        while (ReadFile(outRead, buffer, sizeof(buffer), &read, nullptr) && read > 0) {
-            Send(std::bytearray(PCB(buffer), read));
+        while (running) {
+            if (ReadFile(outRead, buffer, sizeof(buffer), &read, nullptr) && read > 0) {
+                logt.debug() << "Read " << read << " bytes from ConPTY, forwarding to client.";
+                if (outputClient.write(std::bytearray(buffer, read)) == 0) {
+                    logt.warn() << "Write to output stream pipe failed.";
+                    // 写入失败时检查连接是否断开
+                    if (outputClient.broken()) {
+                        logt.warn() << "Output stream pipe broken (output forward thread).";
+                    }
+                    running = false;
+                    break;
+                }
+                logt.debug() << "Sent " << read << " bytes to client.";
+            } else {
+                DWORD err = GetLastError();
+                if (err != ERROR_BROKEN_PIPE && running) {
+                    logt.warn() << "ReadFile from ConPTY failed: " << platform::windows::TranslateError(err);
+                }
+                running = false;
+                break;
+            }
         }
+        logt.debug() << "Output forwarding thread exiting.";
     });
 
     std::atomic_bool externalExitFlag = true;
-    std::thread externalThread([& /* Captures everything in the context */]() {
-        while(externalExitFlag) {
-            std::bytearray Signal = Receive();
-            std::bytearray_view Signal_View(Signal);
-            BrokerSignal signal = Signal_View.read<BrokerSignal>();
+    std::thread externalThread([&]() {
+        logt.debug() << "Control message thread started.";
+        while(running && externalExitFlag) {
+            if(msgClient.waitForReadyRead(std::chrono::seconds(1))) {
+                std::bytearray Signal = msgClient.readAll();
+                if (Signal.empty()) {
+                    // 管道已关闭或断开
+                    logt.debug() << "Control message pipe closed.";
+                    break;
+                }
+                std::bytearray_view Signal_View(Signal);
+                BrokerSignal signal = Signal_View.read<BrokerSignal>();
 
-            switch(signal) {
-            case BrokerSignal::ResizeConsole: {
-                // Read a COORD
-                COORD newSize = Signal_View.read<COORD>();
-                ResizePseudoConsole(hPC, newSize);
+                switch(signal) {
+                case BrokerSignal::ResizeConsole: {
+                    ResizeConsoleData data = Signal_View.read<ResizeConsoleData>();
+                    ResizePseudoConsole(hPC, COORD{ data.width, data.height });
+                    break;
+                }
+                case BrokerSignal::TerminateProcess: {
+                    // Should Ctrl+C the child process.
+                    // Not implemented yet.
+                    break;
+                }
+
+                case BrokerSignal::Null:
+                default:
+                    break;
+                }
+            }
+
+            if(!externalExitFlag) {
                 break;
             }
-            case BrokerSignal::TerminateProcess: {
-                // Should Ctrl+C the child process.
-                // Not implemented yet.
-                break;
-            }
-
-            case BrokerSignal::Null:
-            default:
+            // 检查管道是否已断开
+            if (msgClient.broken()) {
+                logt.debug() << "Control message pipe broken, exiting.";
                 break;
             }
         }
@@ -321,10 +337,25 @@ int Broker::RunProcess(const ProcessContext &pc)
     DWORD exitCode = 0;
     GetExitCodeProcess(pi.hProcess, &exitCode);
 
-    // 往客户端返回进程退出状态码
-    Send(std::bytearray(exitCode)); // will match _Any constructors, so is fine
+    logt.info() << "Target process exited with code: " << exitCode;
 
-    // 清理
+    // 通知所有线程退出
+    running = false;
+    externalExitFlag = false;
+
+    // 往客户端返回进程退出状态码
+    msgClient.write(std::bytearray(exitCode)); // will match _Any constructors, so is fine
+
+    // 关闭 ConPTY 管道句柄以解除 IO 线程的阻塞
+    CloseHandle(inWrite);  inWrite = nullptr;
+    CloseHandle(outRead);  outRead = nullptr;
+
+    // 关闭所有 pipe 连接以解除各线程中阻塞的 read()/waitForReadyRead()
+    inputClient.close();
+    outputClient.close();
+    msgClient.close();
+
+    // 所有阻塞 IO 已被中断，现在可以安全 join
     inputThread.join();
     outputThread.join();
     externalThread.join();
@@ -332,10 +363,6 @@ int Broker::RunProcess(const ProcessContext &pc)
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
     ClosePseudoConsole(hPC);
-    CloseHandle(inWrite);
-    CloseHandle(outRead);
-
-    DisconnectNamedPipe(hpipe); // close the pipe
 
     logt.info() << "Process exited with code: " << exitCode;
     return exitCode;

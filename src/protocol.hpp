@@ -1,11 +1,12 @@
 #pragma once
 #include <string>
 #include <vector>
-#include <windows.h>
+#include <SharedCppLib2/platform_windows.hpp>
 #include <SharedCppLib2/stringlist.hpp>
 
-#define PIPE_NAME L"\\\\.\\pipe\\AutoSudoPipe"
-#define BUFFER_SIZE 4096
+// These macros are no longer used, now the ones in libpipe are used.
+// #define AUTOSUDO_PIPE_NAME R"(\\.\pipe\AutoSudoPipe)"
+// #define BUFFER_SIZE 4096
 
 enum class AuthLevel {
     NotFound = -4,          // 不在允许列表中

@@ -18,7 +18,11 @@
 #include <SharedCppLib2/logt.hpp>
 #include <SharedCppLib2/arguments.hpp>
 
+#include <random>
+
 #include "broker.hpp"
+
+std::string generateStreamPipeName();
 
 int main(int argc, char** argv) {
     std::stringlist args(argc, argv);
@@ -36,11 +40,23 @@ int main(int argc, char** argv) {
         args.erase(args.begin());
     }
 
-    std::wstring assigned_pipe_name = platform::stringToWstring(args[0]);
-    std::string token = args[1];
+    // args[0] -> assigned pipe name, args[1] -> token
+    std::string inputStreamName = generateStreamPipeName();
+    std::string outputStreamName = generateStreamPipeName();
+    
+    Broker broker(args[0], inputStreamName, outputStreamName, std::bytearray::fromHex(args[1]));
+
+    auto result = broker.Run();
+    
+    logt::shutdown();
+    return result;
+}
 
 
-    Broker broker;
-
-    return broker.Start(assigned_pipe_name, std::bytearray::fromHex(token));
+// Generate a random pipe name.
+std::string generateStreamPipeName() {
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dis(1000, 9999);
+    return R"(\\.\pipe\asb_)" + std::to_string(dis(gen));
 }

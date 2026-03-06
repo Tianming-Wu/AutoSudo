@@ -28,19 +28,23 @@ add_library(protocol STATIC src/protocol.cpp)
 target_link_libraries(protocol PRIVATE SharedCppLib2::basic)
 
 # service version
-add_executable(AutoSudoSvc src/service_main.cpp src/pipeserver.cpp src/token.cpp)
+add_executable(AutoSudoSvc src/service_main.cpp src/token.cpp)
 target_link_libraries(AutoSudoSvc protocol auth wtsapi32 userenv SharedCppLib2::logt SharedCppLib2::platform libpipe::libpipe)
 
 # command-line version
-add_executable(AutoSudo src/client_main.cpp src/installer.cpp src/pipeclient.cpp)
-target_link_libraries(AutoSudo protocol wtsapi32 SharedCppLib2::basic SharedCppLib2::logt SharedCppLib2::platform libpipe::libpipe)
+add_executable(AutoSudo src/client_main.cpp src/installer.cpp)
+target_link_libraries(AutoSudo protocol wtsapi32 SharedCppLib2::basic SharedCppLib2::logt SharedCppLib2::platform SharedCppLib2::arguments libpipe::libpipe)
 
 # gui version
-add_executable(AutoSudoW src/client_main.cpp src/installer.cpp src/pipeclient.cpp)
-target_link_libraries(AutoSudoW protocol comctl32 wtsapi32 SharedCppLib2::basic SharedCppLib2::logt SharedCppLib2::platform libpipe::libpipe)
+add_executable(AutoSudoW src/client_main.cpp src/installer.cpp)
+target_link_libraries(AutoSudoW protocol comctl32 wtsapi32 SharedCppLib2::basic SharedCppLib2::logt SharedCppLib2::platform SharedCppLib2::arguments libpipe::libpipe)
 set_target_properties(AutoSudoW PROPERTIES WIN32_EXECUTABLE TRUE)
 target_compile_definitions(AutoSudoW PUBLIC AUTOSUDO_GUI)
 
 # auth ui
 add_executable(AuthUI src/auth_ui.cpp)
 set_target_properties(AuthUI PROPERTIES WIN32_EXECUTABLE TRUE)
+
+# broker
+add_executable(AutoSudoBroker src/broker_main.cpp src/broker.cpp)
+target_link_libraries(AutoSudoBroker protocol auth wtsapi32 userenv SharedCppLib2::logt SharedCppLib2::platform libpipe::libpipe)

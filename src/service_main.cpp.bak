@@ -1,4 +1,4 @@
-#include <windows.h>
+#include <SharedCppLib2/platform_windows.hpp>
 #include <iostream>
 #include <string>
 #include <vector>

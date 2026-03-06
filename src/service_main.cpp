@@ -1,7 +1,9 @@
-#include <windows.h>
 #include <iostream>
 #include <string>
 #include <vector>
+#include <random>
+#include <sstream>
+#include <iomanip>
 #include <userenv.h>
 #include <wtsapi32.h>
 #include <functional>
@@ -17,6 +19,7 @@
 #include "auth_ui.hpp"
 
 #include <SharedCppLib2/platform.hpp>
+#include <SharedCppLib2/platform_windows.hpp>
 
 #define USERAUTH_WAIT_TIMEOUT 10000
 
@@ -28,6 +31,28 @@ HANDLE pipeThread = nullptr;
 bool shouldStopPipeThread = false;
 wchar_t originalDir[MAX_PATH] = {0};
 inline void dirBack() { SetCurrentDirectory(originalDir); }
+
+std::string GenerateBrokerPipeName() {
+    std::random_device rd;
+    std::mt19937_64 gen(rd());
+    std::uniform_int_distribution<unsigned long long> dis;
+    std::ostringstream oss;
+    oss << R"(\\.\pipe\asb_msg_)" << std::hex << dis(gen);
+    return oss.str();
+}
+
+std::string GenerateBrokerTokenHex(size_t bytes = 16) {
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<int> dis(0, 255);
+
+    std::ostringstream oss;
+    oss << std::hex << std::setfill('0');
+    for (size_t i = 0; i < bytes; ++i) {
+        oss << std::setw(2) << dis(gen);
+    }
+    return oss.str();
+}
 
 VOID WINAPI ServiceCtrlHandler(DWORD controlCode) {
     LOGT_LOCAL("ServiceCtrlHandler");
@@ -94,9 +119,14 @@ int RequestUserConfirmation(const ProcessContext& context, AuthUIType type) {
 
     DWORD targetSessionId = context.sessionId;
     if (!SetTokenInformation(userToken, TokenSessionId, &targetSessionId, sizeof(DWORD))) {
-        logt.error() << "SetTokenInformation failed: " << platform::windows::TranslateLastError();
-        CloseHandle(userToken);
-        return static_cast<int>(AuthUIResult::Deny);
+        if (token::isNonServiceMode()) {
+            logt.warn() << "SetTokenInformation failed in non-service mode, continue with current session token: "
+                        << platform::windows::TranslateLastError();
+        } else {
+            logt.error() << "SetTokenInformation failed: " << platform::windows::TranslateLastError();
+            CloseHandle(userToken);
+            return static_cast<int>(AuthUIResult::Deny);
+        }
     }
     
     STARTUPINFO si = {0};
@@ -178,7 +208,7 @@ bool CreateProcessWithContext(const ProcessContext& context) {
     return true;
 }
 
-bool CreateProcessInUserSession(const ProcessContext& context) {
+bool CreateProcessInUserSession(const ProcessContext& context, std::string* brokerToken, std::string* brokerPipeName) {
     LOGT_LOCAL("CreateProcessInUserSession");
     DWORD targetSessionId = context.sessionId;
     
@@ -284,10 +314,15 @@ bool CreateProcessInUserSession(const ProcessContext& context) {
 
     // 设置令牌到目标会话
     if (!SetTokenInformation(targetToken, TokenSessionId, &targetSessionId, sizeof(DWORD))) {
-        logt.error() << "SetTokenInformation failed: " << platform::windows::TranslateLastError();
-        CloseHandle(targetToken);
-        dirBack();
-        return false;
+        if (token::isNonServiceMode()) {
+            logt.warn() << "SetTokenInformation failed in non-service mode, continue with current session token: "
+                        << platform::windows::TranslateLastError();
+        } else {
+            logt.error() << "SetTokenInformation failed: " << platform::windows::TranslateLastError();
+            CloseHandle(targetToken);
+            dirBack();
+            return false;
+        }
     }
     
     HANDLE userToken = nullptr;
@@ -315,7 +350,29 @@ bool CreateProcessInUserSession(const ProcessContext& context) {
     
     PROCESS_INFORMATION pi = {0};
 
-    std::wstring fullCommandLine = MakeFullCommandLine(context);
+    std::wstring fullCommandLine;
+    bool launchingBroker = context.inheritConsole;
+
+    if (launchingBroker) {
+        std::string assignedPipe = GenerateBrokerPipeName();
+        std::string assignedToken = GenerateBrokerTokenHex();
+
+        fullCommandLine = L"\"" + (platform::executable_dir() / L"AutoSudoBroker.exe").wstring() + L"\" ";
+        
+        // 在 non-service 模式下添加 debug 参数
+        if (token::isNonServiceMode()) {
+            fullCommandLine += L"debug ";
+        }
+        
+        fullCommandLine += platform::stringToWstring(assignedPipe) + L" " + platform::stringToWstring(assignedToken);
+
+        if (brokerPipeName) *brokerPipeName = assignedPipe;
+        if (brokerToken) *brokerToken = assignedToken;
+
+        logt.debug() << "Launching broker: " << fullCommandLine;
+    } else {
+        fullCommandLine = MakeFullCommandLine(context);
+    }
     
     BOOL success = CreateProcessAsUser(
         targetToken,
@@ -359,7 +416,11 @@ bool CreateProcessInUserSession(const ProcessContext& context) {
             }
         }
     } else {
-        logt.info() << "Process created successfully in user session, PID: " << pi.dwProcessId;
+        if (launchingBroker) {
+            logt.info() << "Broker created successfully in user session, PID: " << pi.dwProcessId;
+        } else {
+            logt.info() << "Process created successfully in user session, PID: " << pi.dwProcessId;
+        }
     }
     
     if (success) {
@@ -394,9 +455,12 @@ bool ProcessClientRequest(libpipe::pipe_server_client& client) {
     
     // 根据上下文决定创建方式
     bool success = false;
+    std::string brokerToken;
+    std::string brokerMsgPipe;
+
     if (context.useCurrentSession && context.sessionId != 0xFFFFFFFF) {
         logt.debug() << "using CreateProcessInUserSession";
-        success = CreateProcessInUserSession(context);
+        success = CreateProcessInUserSession(context, &brokerToken, &brokerMsgPipe);
     } else {
         logt.debug() << "using CreateProcessWithContext";
         success = CreateProcessWithContext(context);
@@ -404,7 +468,17 @@ bool ProcessClientRequest(libpipe::pipe_server_client& client) {
     
     // 发送响应
     if (success) {
-        client.write(std::bytearray::fromStdWString(L"SUCCESS: Process created"));
+        if (context.inheritConsole && !brokerToken.empty() && !brokerMsgPipe.empty()) {
+            client.write(std::bytearray(brokerToken));
+            client.write(std::bytearray(brokerMsgPipe));
+
+            if(!client.waitForAcknowledged(std::chrono::seconds(1))) {
+                // 1 sec is usually enough. This is a local pipe.
+                logt.warn() << "Client did not acknowledge broker info.";
+            }
+        } else {
+            client.write(std::bytearray::fromStdWString(L"SUCCESS: Process created"));
+        }
     } else {
         client.write(std::bytearray::fromStdWString(L"ERROR: Failed to create process"));
     }
@@ -553,6 +627,7 @@ int wmain(int argc, wchar_t** argv) {
         logt::addfile("autosudo_service_debug.log", true);
         logt::stdcout(true, true); // Enable console logging
         auth::authlist.load();
+        token::setNonServiceMode(true);
 
         logt::setFilterLevel(LogLevel::Debug);
 
@@ -565,6 +640,7 @@ int wmain(int argc, wchar_t** argv) {
         logt::shutdown();
         return 0;
     } else {
+        token::setNonServiceMode(false);
         logt::addfile("autosudo_service.log", true);
         
         // 服务模式

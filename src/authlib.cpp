@@ -2,7 +2,7 @@
 
 #include <wintrust.h>
 #include <softpub.h>
-#include <windows.h>
+#include <SharedCppLib2/platform_windows.hpp>
 
 namespace authlib {
 

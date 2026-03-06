@@ -156,7 +156,6 @@ void list::remove(const fs::path &path) {
     }
 }
 
-
 AuthLevel list::test(const fs::path &path, AuthLevel requestedLevel) {
     if(requestedLevel > AuthLevel::System || requestedLevel < AuthLevel::User) return AuthLevel::Invalid;
     auto it = m_authlist.find(path);

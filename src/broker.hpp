@@ -5,33 +5,27 @@
 #include <SharedCppLib2/platform_windows.hpp>
 #include <SharedCppLib2/bytearray.hpp>
 
+#include <libpipe.hpp>
+
 #include "protocol.hpp"
 
 
 class Broker
 {
 public:
-    Broker();
+    Broker(const std::string& pipeName, const std::string &inputStreamName, const std::string &outputStreamName, const std::bytearray& token);
     ~Broker();
 
-    int Start(const std::wstring& pipeName, const std::bytearray& token);
-    
+    int Run();
 
 private:
-    bool Init();
-    bool Wait();
-
-    std::bytearray Receive();
-    size_t Send(const std::bytearray& data);
-
-    int RunProcess(const ProcessContext& pc);
-
+    int RunProcess(libpipe::pipe_server_client&& msgClient, const ProcessContext& pc);
 
 private:
-    std::wstring m_name;
+    std::string m_name, m_inputStreamName, m_outputStreamName;
     std::bytearray m_token;
 
-    HANDLE hpipe;
+    libpipe::pipe_server msgServer, inputStreamServer, outputStreamServer; // Control, input, and output streams
 
     // Handles for communication with child process.
     HANDLE inRead = nullptr, inWrite = nullptr;
