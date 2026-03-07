@@ -48,3 +48,5 @@ set_target_properties(AuthUI PROPERTIES WIN32_EXECUTABLE TRUE)
 # broker
 add_executable(AutoSudoBroker src/broker_main.cpp src/broker.cpp)
 target_link_libraries(AutoSudoBroker protocol auth wtsapi32 userenv SharedCppLib2::logt SharedCppLib2::platform libpipe::libpipe)
+set_target_properties(AutoSudoBroker PROPERTIES WIN32_EXECUTABLE TRUE)
+target_link_options(AutoSudoBroker PRIVATE /ENTRY:mainCRTStartup)
