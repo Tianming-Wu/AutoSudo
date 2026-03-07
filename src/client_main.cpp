@@ -434,9 +434,10 @@ int wmain(int argc, wchar_t** argv) {
     logt::addfile(platform::executable_dir()/"autosudo.log", true);
 
     // GUI 版本不需要命令行输出，不使用 stdcout
-#ifndef AUTOSUDO_GUI
-    logt::stdcout(true, true);
-#endif
+    // 修改：不再使用以保证输出被完全转移
+// #ifndef AUTOSUDO_GUI
+    // logt::stdcout(true, true);
+// #endif
     
     int result = 0;
     
@@ -447,6 +448,10 @@ int wmain(int argc, wchar_t** argv) {
 
     if (args.addHelp(show_help)) {
         logt::exit(0);
+    }
+
+    if (args.addFlag(L"log-console")) {
+        logt::stdcout(true, true);
     }
 
     AuthLevel authLevel = AuthLevel::Admin; // 默认管理员权限

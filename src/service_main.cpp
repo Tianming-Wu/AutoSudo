@@ -627,7 +627,7 @@ int wmain(int argc, wchar_t** argv) {
         logt::addfile("autosudo_service_debug.log", true);
         logt::stdcout(true, true); // Enable console logging
         auth::authlist.load();
-        token::setNonServiceMode(true);
+        token::setNonServiceMode(true); // Prevent token from failing when not under session 0.
 
         logt::setFilterLevel(LogLevel::Debug);
 
