@@ -21,28 +21,42 @@
 ## 安装和使用
 
 ### 安装服务
+需以管理员权限执行：
 ```bash
-autosudo --install
+AutoSudo --install
 ```
 
 ### 执行命令
 ```bash
 # 默认管理员权限
-autosudo notepad.exe
-autosudo "C:\Program Files\MyApp\app.exe"
+AutoSudo notepad.exe
+AutoSudo "C:\Program Files\MyApp\app.exe"
 
 # 指定权限级别
-autosudo --user notepad.exe
-autosudo --admin cmd.exe
-autosudo --system powershell.exe
+AutoSudo --user notepad.exe
+AutoSudo --admin cmd.exe
+AutoSudo --system powershell.exe
+```
+
+也支持在非命令行环境启用，使用 AutoSudoW:
+```bash
+AutoSudoW --system notepad.exe
+```
+
+### 列表管理
+```bash
+# 删除特定条目
+AutoSudo --delete cmd.exe
 ```
 
 ### 服务管理
+注：这些功能需要管理员权限执行
 ```bash
-autosudo --start      # 启动服务
-autosudo --stop       # 停止服务  
-autosudo --status     # 检查状态（暂未支持）
-autosudo --uninstall  # 卸载服务
+AutoSudo --start      # 启动服务
+AutoSudo --stop       # 停止服务  
+AutoSudo --status     # 检查状态（暂未支持）
+AutoSudo --install    # 安装服务
+AutoSudo --uninstall  # 卸载服务
 ```
 
 ## 工作原理
@@ -52,6 +66,12 @@ autosudo --uninstall  # 卸载服务
 3. **服务端**检查允许列表和权限级别
 4. 需要时显示**用户确认对话框**
 5. 使用相应权限令牌**创建目标进程**
+
+通过命令行程序启动时：
+5. 使用相应权限令牌创建**转发进程**
+6. 将转发进程所用管道名称告知**客户端**
+7. 客户端连接转发进程，握手交换数据，获得生成的串流用管道名称
+8. 转发进程创建子进程，与客户端开始交换数据
 
 ## 构建要求
 
@@ -78,7 +98,7 @@ cmake --build . --config Release
 > [!WARNING]
 > **安全警告**
 > 
-> 此项目的安全措施目前还不完备，**仅作为实验和教育用途**，不建议在生产环境中使用。
+> 此项目的安全措施目前还不完备，**仅作为实验和教育用途**，不应在生产环境中使用。
 > 
 > **已知安全问题**：
 > - 管道通信缺乏加密
@@ -114,11 +134,12 @@ cmake --build . --config Release
 此软件是自由软件，但作者没有义务保证其适用性或安全性。
 你可以自由地修改，复制，分发此软件的源代码或二进制文件，但必须随附作者信息和项目源地址。
 你可以将此软件或修改后的此软件用于商业用途，无需授权。
-你可以附加自己的作者信息，但不得删除原有的作者信息。你可以自行附加条款，但是不得与上述条款冲突。
+你可以附加自己的作者信息，但不得删除原有的作者信息。
 你可以在自己的项目中参考此软件的部分源代码，此种情况下不需要附带作者信息和项目源地址，但不得声称此部分代码是你原创的。
 你不可以将此软件用于恶意用途，包括但不限于攻击他人计算机系统，散布恶意软件等。
 你不可以发布修改后的此软件作为闭源软件。
+你可以自行附加条款，但是不得与上述条款冲突。
 
 ## 贡献
 
-欢迎提交 Issue 和 Pull Request 来帮助改进这个项目。
+欢迎提交 Issue 和 Pull Request 来帮助改进这个项目。但进行较大范围改动或主要功能开发前务必通知原作者，以免与现有的未完成开发路径冲突导致无法合并。
