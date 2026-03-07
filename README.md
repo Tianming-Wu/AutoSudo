@@ -79,6 +79,7 @@ AutoSudo --uninstall  # 卸载服务
 - C++23 兼容编译器（推荐使用 MSVC 2022 版本，因为这个项目是在这个版本上开发的）
 - Windows SDK （10.0.19041.0 或更高版本）
 - [SharedCppLib2 库](https://github.com/Tianming-Wu/SharedCppLib2) 兼容版本（一般保持最新即可，会同步更新）
+- [LibPipe 库](https://github.com/Tianming-Wu/LibPipe) 兼容版本（一般保持最新即可，会同步更新）
 
 ## 构建步骤
 

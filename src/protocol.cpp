@@ -88,3 +88,20 @@ ProcessContext ProcessContext::Deserialize(const std::wstring& data) {
     
     return context;
 }
+
+std::bytearray EnvironmentVariable::serialize()
+{
+    std::bytearray result;
+    result.addWString(name);
+    result.addWString(value);
+
+    return result;
+}
+
+EnvironmentVariable EnvironmentVariable::deserialize(const std::bytearray_view &view)
+{
+    std::wstring name = view.readWString();
+    std::wstring value = view.readWString();
+
+    return { .name = name, .value = value };
+}

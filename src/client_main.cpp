@@ -455,7 +455,7 @@ int wmain(int argc, wchar_t** argv) {
     }
 
     AuthLevel authLevel = AuthLevel::Admin; // 默认管理员权限
-    std::wstring commandLine;
+    std::wstring commandLine = args.xjoinArgs();
     bool exec = true;
     bool deleteAuth = false;
 

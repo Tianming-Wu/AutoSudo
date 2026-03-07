@@ -445,7 +445,12 @@ bool ProcessClientRequest(libpipe::pipe_server_client& client) {
     // 读取请求
     std::wstring requestData = client.readAll().toStdWString();
     if (requestData.empty()) {
-        logt.error() << "Failed to read request from client or empty request";
+        if(client.broken()) {
+            logt.error() << "Client connection is broken.";
+        } else {
+            logt.error() << "Failed to read request from client or empty request";
+        }
+
         return false;
     }
     
