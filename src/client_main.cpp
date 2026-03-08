@@ -174,6 +174,8 @@ int ExecuteCommand(const std::wstring& commandLine, AuthLevel authLevel = AuthLe
         return 1;
     }
 
+    client.acknowledge(); // 确认已接收到服务端响应，防止过早断开
+
     std::wstring firstPacketW = firstPacket.toStdWString();
     if(firstPacketW.starts_with(L"SUCCESS:") || firstPacketW.starts_with(L"ERROR:")) {
         logt.info() << "Server response: " << firstPacketW;

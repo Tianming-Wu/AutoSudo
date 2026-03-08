@@ -483,6 +483,10 @@ bool ProcessClientRequest(libpipe::pipe_server_client& client) {
             }
         } else {
             client.write(std::bytearray::fromStdWString(L"SUCCESS: Process created"));
+            if(!client.waitForAcknowledged(std::chrono::seconds(1))) {
+                // 1 sec is usually enough. This is a local pipe.
+                logt.warn() << "Client did not acknowledge broker info.";
+            }
         }
     } else {
         client.write(std::bytearray::fromStdWString(L"ERROR: Failed to create process"));
