@@ -31,7 +31,7 @@ int main(int argc, char** argv) {
     if(args.empty()) return 0; // This program is not meant to be executed by the user. 
 
     logt::claim("BrokerMain");
-    logt::addfile("autosudo_broker.log", true);
+    logt::addfile(platform::executable_dir()/"autosudo_broker.log", true);
     
     LOGT_LOCAL("BrokerMain");
 
