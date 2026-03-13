@@ -132,6 +132,9 @@ cmake --build . --config Release
 
 ## 许可证
 
+```
+Tianming Wu <https://github.com/Tianming-Wu> 2023-2026
+
 此软件是自由软件，但作者没有义务保证其适用性或安全性。
 你可以自由地修改，复制，分发此软件的源代码或二进制文件，但必须随附作者信息和项目源地址。
 你可以将此软件或修改后的此软件用于商业用途，无需授权。
@@ -140,6 +143,17 @@ cmake --build . --config Release
 你不可以将此软件用于恶意用途，包括但不限于攻击他人计算机系统，散布恶意软件等。
 你不可以发布修改后的此软件作为闭源软件。
 你可以自行附加条款，但是不得与上述条款冲突。
+
+This is free software, but the author has no obligation to guarantee its suitability or security.
+You are free to modify, copy, and distribute the source code or binary files of this software, but you must include the author's information and the project source address.
+You can use this software or modified versions of it for commercial purposes without authorization.
+You can add your own author information, but you must not remove the original author's information.
+You can reference parts of the source code of this software in your own projects, in which case you do not need to include the author's information and project source address, but you must not claim that this part of the code is your original work.
+You may not use this software for malicious purposes, including but not limited to attacking other computer systems, spreading malware, etc.
+You may not release modified versions of this software as closed source software.
+You can add your own terms, but they must not conflict with the above terms.
+
+```
 
 ## 贡献
 
