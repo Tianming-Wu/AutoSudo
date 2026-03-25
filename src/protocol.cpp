@@ -1,107 +1,211 @@
 #include "protocol.hpp"
 
-std::wstring ProcessContext::Serialize() const {
-    std::wstring result = 
-        program + L"\n" + 
-        arguments.pack() + L"\n" + 
-        workingDirectory + L"\n" +
-        calledPath + L"\n" +
-        std::to_wstring(sessionId) + L"\n" +
-        std::to_wstring(useCurrentSession) + L"\n" +
-        std::to_wstring(deleteAuth) + L"\n" +
-        std::to_wstring(static_cast<int>(requestedAuthLevel)) + L"\n" +
+std::bytearray AutoSudoRequest::dump(const AutoSudoRequest &asr)
+{
+    std::bytearray data;
 
-        (inheritConsole ? L"1\n" : L"0\n") +
-        std::to_wstring(ConsoleX) + L"\n" +
-        std::to_wstring(ConsoleY) + L"\n";
-    
-    for (const auto& env : environmentVariables) {
-        result += env + L"\n";
-    }
-    return result;
+    data.addWString(asr.executableFullPath);
+    data.addWString(asr.arguments.pack());
+    data.addWString(asr.workingDirectory);
+    data.addWString(asr.calledPath);
+
+    data.append(asr.targetSessionId);
+    data.append(asr.useCurrentSession);
+    // data.append(asr.deleteAuth);
+    data.append(asr.requestedPermissionLevel);
+
+    data.append(asr.inheritConsole);
+    data.append(asr.ihConsoleX);
+    data.append(asr.ihConsoleY);
+
+    // data.appendSize(asr.environmentVariables.size());
+    // for (const auto& env : asr.environmentVariables) {
+    //     data.addWString(env);
+    // }
+
+    return data;
 }
 
-ProcessContext ProcessContext::Deserialize(const std::wstring& data) {
-    ProcessContext context;
-    
-    // 使用 stringlist 分割数据，更优雅且安全
-    std::wstringlist content(data, L"\n");
-    
-    // 检查最小字段数量
-    if (content.size() < 11) {
-        throw std::runtime_error("Invalid serialized data: insufficient fields");
-    }
-    
-    size_t index = 0;
-    
-    // 解析程序路径
-    context.program = content.vat(index++);
-    
-    // 解析参数
-    context.arguments = std::wstringlist::unpack(content.vat(index++));
-    
-    // 解析工作目录
-    context.workingDirectory = content.vat(index++);
-    
-    // 解析调用路径
-    context.calledPath = content.vat(index++);
-    
-    // 解析会话ID
-    try {
-        context.sessionId = std::stoul(content.vat(index++));
-    } catch (...) {
-        context.sessionId = 0;
-    }
-    
-    // 解析useCurrentSession
-    std::wstring useSessionStr = content.vat(index++);
-    context.useCurrentSession = (useSessionStr == L"1");
-    
-    // 解析deleteAuth
-    std::wstring deleteAuthStr = content.vat(index++);
-    context.deleteAuth = (deleteAuthStr == L"1");
-    
-    // 解析认证级别
-    try {
-        context.requestedAuthLevel = static_cast<AuthLevel>(std::stoi(content.vat(index++)));
-    } catch (...) {
-        context.requestedAuthLevel = AuthLevel::Admin; // 默认值
-    }
+AutoSudoRequest AutoSudoRequest::load(const std::bytearray_view &data)
+{
+    AutoSudoRequest req;
 
-    // 解析控制台参数
-    context.inheritConsole = content.vat(index++) == L"1";
-    try {
-        context.ConsoleX = std::stoi(content.vat(index++));
-        context.ConsoleY = std::stoi(content.vat(index++));
-    } catch (...) {
-        context.ConsoleX = 0;
-        context.ConsoleY = 0;
+    req.executableFullPath = data.readWString();
+    req.arguments = std::wstringlist::unpack(data.readWString());
+    req.workingDirectory = data.readWString();
+    req.calledPath = data.readWString();
+    
+    req.targetSessionId = data.read<unsigned long>();
+    req.useCurrentSession = data.read<bool>();
+    // req.deleteAuth = data.read<bool>();
+    req.requestedPermissionLevel = data.read<PermissionLevel>();
+    req.inheritConsole = data.read<bool>();
+    req.ihConsoleX = data.read<long>();
+    req.ihConsoleY = data.read<long>();
+
+    // size_t envCount = data.read<size_t>();
+    // req.environmentVariables.reserve(envCount);
+    // for (size_t i = 0; i < envCount; ++i) {
+    //     req.environmentVariables.push_back(data.readWString());
+    // }
+
+    return req;
+}
+
+
+
+std::bytearray RuleEngineOperationRequest::dump() const {
+    std::bytearray data;
+    data.append(op);
+    data.append(targetUid);
+    data.append(ruleType);
+    data.append(ruleEType);
+    data.append(ruleAction);
+    data.append(ruleAllowUpTo);
+    data.appendSize(payload.size());
+    data.append(payload);
+    
+    // Serialize optional values
+    data.append(insertAt.has_value());
+    if (insertAt.has_value()) {
+        data.append(insertAt.value());
     }
     
-    // 解析环境变量（剩余的所有行）
-    while (index < content.size()) {
-        std::wstring env = content.vat(index++);
-        if (!env.empty()) {
-            context.environmentVariables.push_back(env);
+    data.append(moveToOrder.has_value());
+    if (moveToOrder.has_value()) {
+        data.append(moveToOrder.value());
+    }
+    
+    return data;
+}
+
+RuleEngineOperationRequest RuleEngineOperationRequest::load(const std::bytearray_view &data) {
+    RuleEngineOperationRequest op;
+    op.op = data.read<RuleEngineOperation>();
+    op.targetUid = data.read<uint16_t>();
+    op.ruleType = data.read<uint16_t>();
+    op.ruleEType = data.read<uint8_t>();
+    op.ruleAction = data.read<uint32_t>();
+    op.ruleAllowUpTo = data.read<PermissionLevel>();
+    
+    size_t payloadSize = data.read<size_t>();
+    if (payloadSize > 0) {
+        // Read payload bytes
+        std::bytearray tempPayload;
+        for (size_t i = 0; i < payloadSize; ++i) {
+            tempPayload.append(data.read<uint8_t>());
         }
+        op.payload = tempPayload;
     }
     
-    return context;
+    // Deserialize optional values
+    bool hasInsertAt = data.read<bool>();
+    if (hasInsertAt) {
+        op.insertAt = data.read<uint16_t>();
+    }
+    
+    bool hasMoveToOrder = data.read<bool>();
+    if (hasMoveToOrder) {
+        op.moveToOrder = data.read<uint16_t>();
+    }
+    
+    return op;
 }
 
-std::bytearray EnvironmentVariable::serialize()
-{
-    std::bytearray result;
-    result.addWString(name);
-    result.addWString(value);
+std::bytearray RuleEngineOperationResult::dump() const {
+    std::bytearray data;
+    data.append(success);
+    data.addString(message);
+    data.append(createdUid);
+    return data;
+}
 
+RuleEngineOperationResult RuleEngineOperationResult::load(const std::bytearray_view &data) {
+    RuleEngineOperationResult result;
+    result.success = data.read<bool>();
+    result.message = data.readString();
+    result.createdUid = data.read<uint16_t>();
     return result;
 }
 
-EnvironmentVariable EnvironmentVariable::deserialize(const std::bytearray_view &view)
-{
-    std::wstring name = view.readWString();
-    std::wstring value = view.readWString();
-
-    return { .name = name, .value = value };
+std::bytearray RuleEntry::dump() const {
+    std::bytearray data;
+    data.append(uid);
+    data.append(order);
+    data.append(type);
+    data.append(etype);
+    data.append(action);
+    data.append(allowUpTo);
+    data.appendSize(payload.size());
+    data.append(payload);
+    return data;
 }
+
+RuleEntry RuleEntry::load(const std::bytearray_view &data) {
+    RuleEntry entry;
+    entry.uid = data.read<uint16_t>();
+    entry.order = data.read<uint16_t>();
+    entry.type = data.read<uint16_t>();
+    entry.etype = data.read<uint8_t>();
+    entry.action = data.read<uint32_t>();
+    entry.allowUpTo = data.read<PermissionLevel>();
+    
+    size_t payloadSize = data.read<size_t>();
+    if (payloadSize > 0) {
+        // Read payload bytes
+        std::bytearray tempPayload;
+        for (size_t i = 0; i < payloadSize; ++i) {
+            tempPayload.append(data.read<uint8_t>());
+        }
+        entry.payload = tempPayload;
+    }
+    
+    return entry;
+}
+
+std::bytearray RuleListResponse::dump() const {
+    std::bytearray data;
+    data.appendSize(rules.size());
+    for (const auto& rule : rules) {
+        std::bytearray ruleData = rule.dump();
+        data.appendSize(ruleData.size());
+        data.append(ruleData);
+    }
+    return data;
+}
+
+RuleListResponse RuleListResponse::load(const std::bytearray_view &data) {
+    RuleListResponse response;
+    size_t ruleCount = data.read<size_t>();
+    
+    for (size_t i = 0; i < ruleCount; ++i) {
+        size_t ruleSize = data.read<size_t>();
+        // Create a temporary bytearray containing the rule data
+        std::bytearray ruleData;
+        for (size_t j = 0; j < ruleSize; ++j) {
+            ruleData.append(data.read<uint8_t>());
+        }
+        std::bytearray_view ruleView(ruleData);
+        response.rules.push_back(RuleEntry::load(ruleView));
+    }
+    
+    return response;
+}
+
+
+// std::bytearray EnvironmentVariable::serialize()
+// {
+//     std::bytearray result;
+//     result.addWString(name);
+//     result.addWString(value);
+
+//     return result;
+// }
+
+// EnvironmentVariable EnvironmentVariable::deserialize(const std::bytearray_view &view)
+// {
+//     std::wstring name = view.readWString();
+//     std::wstring value = view.readWString();
+
+//     return { .name = name, .value = value };
+// }

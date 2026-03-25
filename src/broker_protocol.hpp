@@ -26,4 +26,4 @@ struct ResizeConsoleData {
 };
 
 // The broker pipe name, used for ConPTY streaming.
-#define BROKER_PIPE_NAME R"(\\.\pipe\AutoSudoBrokerPipe)"
+// #define BROKER_PIPE_NAME R"(\\.\pipe\AutoSudoBrokerPipe)"

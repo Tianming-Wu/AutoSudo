@@ -11,10 +11,11 @@
 #include <libpipe.hpp>
 
 #include "protocol.hpp"
-// #include "pipeserver.hpp"
-#include "auth.hpp"
-#include "token.hpp"
+// #include "pipeserver.hpp" // discarded module
+// #include "auth.hpp" // deprecated module, replaced by approval (RuleEngine)
+#include "wintoken.hpp"
 // #include "authlib.hpp"
+#include "approval.hpp"
 
 #include "auth_ui.hpp"
 
@@ -58,7 +59,7 @@ VOID WINAPI ServiceCtrlHandler(DWORD controlCode) {
     LOGT_LOCAL("ServiceCtrlHandler");
     switch (controlCode) {
         case SERVICE_CONTROL_STOP:
-            logt.info() << "Service stopping...";
+            logt.info() << "Stopping service..."; // Edit: This should be "subjective", not "passive"
             serviceStatus.dwCurrentState = SERVICE_STOP_PENDING;
             serviceStatus.dwWaitHint = 10000; // 10秒超时
             serviceStatus.dwCheckPoint = 1;
@@ -71,6 +72,7 @@ VOID WINAPI ServiceCtrlHandler(DWORD controlCode) {
             }
 
             if (pipeThread) {
+                // This logic should be no longer needed, since we now have pipe-server.
                 WaitForSingleObject(pipeThread, 5000); // 最多等5秒
                 CloseHandle(pipeThread);
                 pipeThread = nullptr;
@@ -97,7 +99,7 @@ void UpdateServiceStatus(DWORD state, DWORD checkpoint = 0, DWORD waitHint = 0) 
     }
 }
 
-int RequestUserConfirmation(const ProcessContext& context, AuthUIType type) {
+int RequestUserConfirmation(const AutoSudoRequest& context, AuthUIType type) {
     LOGT_LOCAL("RequestUserConfirmation");
 
     // static const wchar_t* typeStr[] = {L"NOTFOUND", L"INSUFFICIENTLEVEL", L"HASHMISMATCH"};
@@ -106,25 +108,27 @@ int RequestUserConfirmation(const ProcessContext& context, AuthUIType type) {
     // 构建确认对话框命令行
     std::wstring commandLine = (platform::executable_dir() / L"AuthUI.exe").wstring()
         + L" " + AuthUITypeStr[static_cast<int>(type)]
-        + L" " + levelStr[static_cast<int>(context.requestedAuthLevel)]
-        + L" \"" + context.program + L"\"";
+        + L" " + levelStr[static_cast<int>(context.requestedPermissionLevel)]
+        + L" \"" + context.executableFullPath + L"\"";
 
-    logt.debug() << "Auth command: " << commandLine;
+    logt.debug() << "Auth UI command: " << commandLine;
     
-    HANDLE userToken = token::getUserToken(context);
-    if(userToken == nullptr) {
-        logt.error() << "Failed to get user token.";
+    // 使用管理员令牌启动UI，防止用户态进程可以模拟点击对话框
+    // 这是UI隔离的安全设计，确保确认框只能由高权限进程操作
+    HANDLE adminToken = wintoken::getAdminToken(context);
+    if(adminToken == nullptr) {
+        logt.error() << "Failed to get admin token for confirmation UI.";
         return static_cast<int>(AuthUIResult::Deny);
     }
 
-    DWORD targetSessionId = context.sessionId;
-    if (!SetTokenInformation(userToken, TokenSessionId, &targetSessionId, sizeof(DWORD))) {
-        if (token::isNonServiceMode()) {
+    DWORD targetSessionId = context.targetSessionId;
+    if (!SetTokenInformation(adminToken, TokenSessionId, &targetSessionId, sizeof(DWORD))) {
+        if (wintoken::isNonServiceMode()) {
             logt.warn() << "SetTokenInformation failed in non-service mode, continue with current session token: "
                         << platform::windows::TranslateLastError();
         } else {
             logt.error() << "SetTokenInformation failed: " << platform::windows::TranslateLastError();
-            CloseHandle(userToken);
+            CloseHandle(adminToken);
             return static_cast<int>(AuthUIResult::Deny);
         }
     }
@@ -133,11 +137,11 @@ int RequestUserConfirmation(const ProcessContext& context, AuthUIType type) {
     PROCESS_INFORMATION pi = {0};
     si.cb = sizeof(STARTUPINFO);
     
-    BOOL success = CreateProcessAsUser(userToken, nullptr, const_cast<LPWSTR>(commandLine.c_str()), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi);
+    BOOL success = CreateProcessAsUser(adminToken, nullptr, const_cast<LPWSTR>(commandLine.c_str()), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi);
     
     if (!success) {
-        logt.error() << "Failed to launch confirmation UI";
-        CloseHandle(userToken);
+        logt.error() << "Failed to launch confirmation UI with admin token";
+        CloseHandle(adminToken);
         return static_cast<int>(AuthUIResult::Deny);
     }
     
@@ -153,30 +157,30 @@ int RequestUserConfirmation(const ProcessContext& context, AuthUIType type) {
     
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
-    CloseHandle(userToken);
+    CloseHandle(adminToken);
     
-    logt.info() << "User confirmation result: " << exitCode;
+    logt.info() << "Confirmation UI result: " << exitCode;
     return static_cast<int>(exitCode);
 }
 
-std::wstring MakeFullCommandLine(const ProcessContext& context) {
-    std::wstringlist args = context.arguments;
-    args.insert(args.begin(), context.program);
+std::wstring MakeFullCommandLine(const AutoSudoRequest& request) {
+    std::wstringlist args = request.arguments;
+    args.insert(args.begin(), request.executableFullPath);
     return args.xjoin();
 }
 
-bool CreateProcessWithContext(const ProcessContext& context) {
+bool CreateProcessWithContext(const AutoSudoRequest& context) {
     LOGT_LOCAL("CreateProcessWithContext");
     // 准备环境块
-    LPVOID envBlock = nullptr;
-    if (!context.environmentVariables.empty()) {
-        std::wstring envStr;
-        for (const auto& env : context.environmentVariables) {
-            envStr += env + L'\0';
-        }
-        envStr += L'\0';
-        envBlock = (LPVOID)envStr.c_str();
-    }
+    // LPVOID envBlock = nullptr;
+    // if (!context.environmentVariables.empty()) {
+    //     std::wstring envStr;
+    //     for (const auto& env : context.environmentVariables) {
+    //         envStr += env + L'\0';
+    //     }
+    //     envStr += L'\0';
+    //     envBlock = (LPVOID)envStr.c_str();
+    // }
     
     STARTUPINFO si = {0};
     si.cb = sizeof(STARTUPINFO);
@@ -193,7 +197,7 @@ bool CreateProcessWithContext(const ProcessContext& context) {
         nullptr,
         FALSE,
         CREATE_NEW_CONSOLE | CREATE_UNICODE_ENVIRONMENT,
-        envBlock,
+        nullptr, // envBlock,
         context.workingDirectory.empty() ? nullptr : context.workingDirectory.c_str(),
         &si,
         &pi
@@ -208,104 +212,114 @@ bool CreateProcessWithContext(const ProcessContext& context) {
     return true;
 }
 
-bool CreateProcessInUserSession(const ProcessContext& context, std::string* brokerToken, std::string* brokerPipeName) {
+bool CreateProcessInUserSession(const AutoSudoRequest& request, std::string* brokerToken, std::string* brokerPipeName) {
     LOGT_LOCAL("CreateProcessInUserSession");
-    DWORD targetSessionId = context.sessionId;
+    DWORD targetSessionId = request.targetSessionId;
     
     // 如果useCurrentSession为false或者sessionId无效，使用默认逻辑
     // 此判断已经在调用处进行过一次，但这里再确认一次以防万一
-    if (!context.useCurrentSession || targetSessionId == 0xFFFFFFFF) {
-        logt.warn() << "Fallback to using default session handling";
-        return CreateProcessWithContext(context); // 回退到原来的方法
-    }
+    // 修改：不再在此处进行验证
+    // if (!request.useCurrentSession || targetSessionId == 0xFFFFFFFF) {
+    //     logt.warn() << "Fallback to using default session handling";
+    //     return CreateProcessWithContext(request); // 回退到原来的方法
+    // }
     
     logt.debug() << "Creating process in session: " << targetSessionId;
     
-    if (!context.calledPath.empty()) {
-        if (SetCurrentDirectory(context.calledPath.c_str())) {
-            logt.debug() << "Changed working directory to: " << context.calledPath;
+    if (!request.calledPath.empty()) {
+        if (SetCurrentDirectory(request.calledPath.c_str())) {
+            logt.debug() << "Changed working directory to: " << request.calledPath;
         } else {
-            logt.warn() << "Failed to change working directory to: " << context.calledPath;
+            logt.warn() << "Failed to change working directory to: " << request.calledPath;
         }
     }
-
-    AuthLevel authResult = auth::authlist.test(context.program, context.requestedAuthLevel);
 
     // 如果设置了 deleteAuth 标志，询问用户是否删除授权
-    if (context.deleteAuth) {
-        int authUIResult = RequestUserConfirmation(context, AuthUIType::ConfirmDeletion);
-        if (authUIResult == static_cast<int>(AuthUIResult::Delete)) {
-            // 用户选择删除
-            logt.info() << "User confirmed deletion of: " << context.program;
-            auth::authlist.remove(context.program);
-            dirBack();
-            return true;  // 删除授权后返回true，不执行程序
-        } else if (authUIResult == static_cast<int>(AuthUIResult::Deny)) {
-            // 用户选择取消
-            logt.info() << "User cancelled deletion operation";
-            dirBack();
-            return false;
-        }
-        // authUIResult == AuthUIResult::Allow 时继续执行授权检查
+    // 26.03.22: 这套判断逻辑已经不适用于新的规则系统，将于未来版本完全移除
+    // if (request.deleteAuth) {
+    //     int authUIResult = RequestUserConfirmation(request, AuthUIType::ConfirmDeletion);
+    //     if (authUIResult == static_cast<int>(AuthUIResult::Delete)) {
+    //         // 用户选择删除
+    //         logt.info() << "User confirmed deletion of: " << request.program;
+    //         auth::authlist.remove(request.program);
+    //         dirBack();
+    //         return true;  // 删除授权后返回true，不执行程序
+    //     } else if (authUIResult == static_cast<int>(AuthUIResult::Deny)) {
+    //         // 用户选择取消
+    //         logt.info() << "User cancelled deletion operation";
+    //         dirBack();
+    //         return false;
+    //     }
+    //     // authUIResult == AuthUIResult::Allow 时继续执行授权检查
+    // }
+
+    // 授权判断流程：
+
+    ApprovalResult apr;
+    try {
+        apr = ApprovalEngine::evaluate(protToRequest(request));
+    } catch (const std::exception& ex) {
+        logt.error() << "Exception during approval evaluation: " << ex.what();
+        // 评估失败，视为拒绝
+        dirBack();
+        return false;
     }
 
-    switch(authResult) {
-        case AuthLevel::Invalid:
-            logt.error() << "Invalid requested permission level, ignoring.";
+    logt.debug() << "Approval result: " << static_cast<int>(apr.result) 
+                << (apr.reason.has_value() ? ", reason: " + apr.reason.value() : "")
+                << ", allowed level: " << static_cast<int>(apr.allowUpTo);
+
+    switch(apr.result) {
+        case ApprovalResultId::Denied:
+            logt.info() << "Authorization denied by approval engine" << (apr.reason.has_value() ? ", reason: " + apr.reason.value() : "");
+            ///TODO: Post a toast notification to inform the user about the denial and possible reasons.
             dirBack();
             return false;
-        case AuthLevel::NotFound:
-            if (RequestUserConfirmation(context, AuthUIType::ConfirmNew) != static_cast<int>(AuthUIResult::Allow)) {
-                dirBack();
-                return false;
+
+        case ApprovalResultId::Approved:
+            logt.debug() << "Authorization approved by approval engine.";
+
+            // Check the permission level
+            if (apr.allowUpTo >= request.requestedPermissionLevel) {
+                // Nothing goes wrong
+                break;
+            } else {
+                logt.info() << "Approval engine allows up to " << static_cast<int>(apr.allowUpTo) 
+                            << " but requested level is " << static_cast<int>(request.requestedPermissionLevel);
+                // Bypass to RequestUserConfirmation.
+                // Later we may add a individual rule to determine the behavior when the permission level is insufficient.
             }
-            auth::authlist.insert(context.program, context.requestedAuthLevel);
-            break;
-        case AuthLevel::InsufficientLevel:
-            if (RequestUserConfirmation(context, AuthUIType::ConfirmRaise) != static_cast<int>(AuthUIResult::Allow)) {
+
+        case ApprovalResultId::RequestConfirmation:
+            ///TODO: RequestUserConfirmation also needs to be adapted to the new approval engine.
+            
+            // The rule handing UI is moved to a separate project made with Qt.
+            // The intergration is done by AutoSudoSdk, use CMake install to make it available.
+            // Check AutoSudoGUI project for details.
+
+            ///TODO: Distinguish between no rules and not found.
+            // Insufficient level is not supported by the current RuleEngine design.
+
+            if (RequestUserConfirmation(request, AuthUIType::NoRuleMatched) != static_cast<int>(AuthUIResult::Allow)) {
                 dirBack();
                 return false;
             }
             // 用户确认，更新权限级别
-            auth::authlist.insert(context.program, context.requestedAuthLevel);
+            // auth::authlist.insert(request.program, request.requestedPermissionLevel);
             break;
-        case AuthLevel::HashMismatch:
-            if (RequestUserConfirmation(context, AuthUIType::ConfirmHashRebuild) != static_cast<int>(AuthUIResult::Allow)) {
-                dirBack();
-                return false;
-            }
-            // 用户确认，重新添加程序
-            // （我偷懒了
-            auth::authlist.remove(context.program);
-            auth::authlist.insert(context.program, context.requestedAuthLevel);
-            break;
+        case ApprovalResultId::Fail:
+            logt.error() << "Authorization evaluation failed, treating as Denied." << (apr.reason.has_value() ? " Reason: " + apr.reason.value() : "");
+            dirBack();
+            return false;
         default:
-            logt.debug() << "Authorization check passed.";
-            break;
+            logt.fatal() << "Unexpected approval result.";
+            return false;
     }
 
-    AuthLevel finalLevel = (static_cast<int>(authResult) >= 0) ? authResult : context.requestedAuthLevel;
-    logt.debug() << "Final authorization level: " << static_cast<int>(finalLevel);
-
-    HANDLE targetToken = nullptr;
-
-    switch(finalLevel) {
-    case AuthLevel::User:
-        targetToken = token::getUserToken(context); break;
-    case AuthLevel::Admin:
-        targetToken = token::getAdminToken(context); break;
-    case AuthLevel::System:
-        targetToken = token::getSystemToken(context); break;
-    default:
-        targetToken = nullptr;
-    }
+    HANDLE targetToken = wintoken::getToken(request.requestedPermissionLevel, request);
 
     if(targetToken == nullptr) {
         // 获取令牌失败，退出
-        // 日志已经在获取函数中输出，不再重复
-
-        // 草，失败了竟然里面没有输出
-        // 似乎是 LOGT_MODULE 的 bug，它是全局 static 对象，早于 logt 设置初始化，没有正确获取全局设置
         logt.error() << "Failed to obtain token for the requested authorization level.";
 
         dirBack();
@@ -314,7 +328,7 @@ bool CreateProcessInUserSession(const ProcessContext& context, std::string* brok
 
     // 设置令牌到目标会话
     if (!SetTokenInformation(targetToken, TokenSessionId, &targetSessionId, sizeof(DWORD))) {
-        if (token::isNonServiceMode()) {
+        if (wintoken::isNonServiceMode()) {
             logt.warn() << "SetTokenInformation failed in non-service mode, continue with current session token: "
                         << platform::windows::TranslateLastError();
         } else {
@@ -351,7 +365,7 @@ bool CreateProcessInUserSession(const ProcessContext& context, std::string* brok
     PROCESS_INFORMATION pi = {0};
 
     std::wstring fullCommandLine;
-    bool launchingBroker = context.inheritConsole;
+    bool launchingBroker = request.inheritConsole;
 
     if (launchingBroker) {
         std::string assignedPipe = GenerateBrokerPipeName();
@@ -360,7 +374,7 @@ bool CreateProcessInUserSession(const ProcessContext& context, std::string* brok
         fullCommandLine = L"\"" + (platform::executable_dir() / L"AutoSudoBroker.exe").wstring() + L"\" ";
         
         // 在 non-service 模式下添加 debug 参数
-        if (token::isNonServiceMode()) {
+        if (wintoken::isNonServiceMode()) {
             fullCommandLine += L"debug ";
         }
         
@@ -371,7 +385,7 @@ bool CreateProcessInUserSession(const ProcessContext& context, std::string* brok
 
         logt.debug() << "Launching broker: " << fullCommandLine;
     } else {
-        fullCommandLine = MakeFullCommandLine(context);
+        fullCommandLine = MakeFullCommandLine(request);
     }
     
     BOOL success = CreateProcessAsUser(
@@ -383,7 +397,7 @@ bool CreateProcessInUserSession(const ProcessContext& context, std::string* brok
         FALSE,
         CREATE_UNICODE_ENVIRONMENT,
         envBlock,
-        context.workingDirectory.empty() ? nullptr : context.workingDirectory.c_str(),
+        request.workingDirectory.empty() ? nullptr : request.workingDirectory.c_str(),
         &si,
         &pi
     );
@@ -404,7 +418,7 @@ bool CreateProcessInUserSession(const ProcessContext& context, std::string* brok
                 FALSE,
                 CREATE_NEW_CONSOLE,
                 nullptr,
-                context.workingDirectory.empty() ? nullptr : context.workingDirectory.c_str(),
+                request.workingDirectory.empty() ? nullptr : request.workingDirectory.c_str(),
                 &si,
                 &pi
             );
@@ -439,52 +453,39 @@ bool CreateProcessInUserSession(const ProcessContext& context, std::string* brok
     return success;
 }
 
-bool ProcessClientRequest(libpipe::pipe_server_client& client) {
-    LOGT_LOCAL("ProcessClientRequest");
+// Handle process execution request
+bool HandleExecutionRequest(libpipe::pipe_server_client& client, const std::bytearray& data) {
+    LOGT_LOCAL("HandleExecutionRequest");
 
-    // 读取请求
-    std::wstring requestData = client.readAll().toStdWString();
-    if (requestData.empty()) {
-        if(client.broken()) {
-            logt.error() << "Client connection is broken.";
-        } else {
-            logt.error() << "Failed to read request from client or empty request";
-        }
-
-        return false;
-    }
-    
-    // 反序列化上下文
-    ProcessContext context = ProcessContext::Deserialize(requestData);
-    logt.info() << "Received command: " << context.program << ", args: " << context.arguments.xjoin();
+    // Handle program execution request
+    AutoSudoRequest request = AutoSudoRequest::load(data);
+    logt.info() << "Received command: " << request.executableFullPath << ", args: " << request.arguments.xjoin();
     
     // 根据上下文决定创建方式
     bool success = false;
     std::string brokerToken;
     std::string brokerMsgPipe;
 
-    if (context.useCurrentSession && context.sessionId != 0xFFFFFFFF) {
+    if (request.useCurrentSession && request.targetSessionId != 0xFFFFFFFF) {
         logt.debug() << "using CreateProcessInUserSession";
-        success = CreateProcessInUserSession(context, &brokerToken, &brokerMsgPipe);
+        success = CreateProcessInUserSession(request, &brokerToken, &brokerMsgPipe);
     } else {
         logt.debug() << "using CreateProcessWithContext";
-        success = CreateProcessWithContext(context);
+        success = CreateProcessWithContext(request);
     }
     
     // 发送响应
     if (success) {
-        if (context.inheritConsole && !brokerToken.empty() && !brokerMsgPipe.empty()) {
+        if (request.inheritConsole && !brokerToken.empty() && !brokerMsgPipe.empty()) {
             client.write(std::bytearray(brokerToken));
             client.write(std::bytearray(brokerMsgPipe));
 
             if(!client.waitForAcknowledged(std::chrono::seconds(1))) {
-                // 1 sec is usually enough. This is a local pipe.
                 logt.warn() << "Client did not acknowledge broker info.";
             }
         } else {
             client.write(std::bytearray::fromStdWString(L"SUCCESS: Process created"));
             if(!client.waitForAcknowledged(std::chrono::seconds(1))) {
-                // 1 sec is usually enough. This is a local pipe.
                 logt.warn() << "Client did not acknowledge broker info.";
             }
         }
@@ -493,6 +494,140 @@ bool ProcessClientRequest(libpipe::pipe_server_client& client) {
     }
     
     return true;
+}
+
+// Handle rule management operations
+bool ProcessRuleOperation(libpipe::pipe_server_client& client, const std::bytearray& data) {
+    LOGT_LOCAL("ProcessRuleOperation");
+    
+    try {
+        RuleEngineOperationRequest op = RuleEngineOperationRequest::load(data);
+        
+        auto enginePtr = ApprovalEngine::instance();
+        RuleEngineOperationResult result;
+        
+        switch (op.op) {
+            case RuleEngineOperation::Create: {
+                logt.info() << "Creating new rule, type=" << static_cast<int>(op.ruleType);
+                apprule_uid_t newUid = enginePtr->create(
+                    static_cast<ApprovalRule::Type>(op.ruleType),
+                    static_cast<ApprovalRule::EType>(op.ruleEType),
+                    static_cast<ApprovalRule::Action>(op.ruleAction),
+                    op.ruleAllowUpTo,
+                    op.payload,
+                    op.insertAt
+                );
+                result.success = true;
+                result.createdUid = newUid;
+                result.message = "Rule created successfully";
+                break;
+            }
+            
+            case RuleEngineOperation::Modify: {
+                logt.info() << "Modifying rule, uid=" << op.targetUid;
+                bool success = enginePtr->modify(
+                    op.targetUid,
+                    static_cast<ApprovalRule::Type>(op.ruleType),
+                    static_cast<ApprovalRule::EType>(op.ruleEType),
+                    static_cast<ApprovalRule::Action>(op.ruleAction),
+                    op.ruleAllowUpTo,
+                    op.payload,
+                    op.moveToOrder
+                );
+                result.success = success;
+                result.message = success ? "Rule modified successfully" : "Failed to modify rule: UID not found";
+                break;
+            }
+            
+            case RuleEngineOperation::Delete: {
+                logt.info() << "Deleting rule, uid=" << op.targetUid;
+                bool success = enginePtr->remove(op.targetUid);
+                result.success = success;
+                result.message = success ? "Rule deleted successfully" : "Failed to delete rule: UID not found";
+                break;
+            }
+            
+            case RuleEngineOperation::Move: {
+                logt.info() << "Moving rule, uid=" << op.targetUid << " to order=" << op.moveToOrder.value_or(0);
+                bool success = false;
+                if (op.moveToOrder.has_value()) {
+                    success = enginePtr->moveTo(op.targetUid, op.moveToOrder.value());
+                    result.message = success ? "Rule moved successfully" : "Failed to move rule";
+                } else {
+                    result.message = "Move operation requires moveToOrder value";
+                }
+                result.success = success;
+                break;
+            }
+            
+            case RuleEngineOperation::List: {
+                logt.info() << "Listing all rules";
+                RuleListResponse listResponse;
+                listResponse.rules = enginePtr->listRules();
+                logt.info() << "List operation returns " << listResponse.rules.size() << " rules";
+                client.write(listResponse.dump());
+                if(!client.waitForAcknowledged(std::chrono::seconds(1))) {
+                    logt.warn() << "Client did not acknowledge rule list response.";
+                }
+                return true;
+            }
+            
+            default:
+                result.success = false;
+                result.message = "Unknown operation";
+                break;
+        }
+        
+        // Send result
+        client.write(result.dump());
+        if(!client.waitForAcknowledged(std::chrono::seconds(1))) {
+            logt.warn() << "Client did not acknowledge rule operation response.";
+        }
+        return true;
+        
+    } catch (const std::exception& e) {
+        logt.error() << "Exception in ProcessRuleOperation: " << e.what();
+        RuleEngineOperationResult result;
+        result.success = false;
+        result.message = std::string("Exception: ") + e.what();
+        client.write(result.dump());
+        return false;
+    }
+}
+
+bool ProcessClientRequest(libpipe::pipe_server_client& client) {
+    LOGT_LOCAL("ProcessClientRequest");
+
+    // 读取请求数据
+    std::bytearray data = client.readAll();
+    if (data.empty()) {
+        if(client.broken()) {
+            logt.error() << "Client connection is broken.";
+        } else {
+            logt.error() << "Failed to read request from client or empty request";
+        }
+        return false;
+    }
+
+    // The first byte indicates the request type
+    ClientRequestType reqType = data.subarr(0, sizeof(ClientRequestType)).as<ClientRequestType>();
+
+    logt.debug() << "Received client type: " << static_cast<int>(reqType) << ", data size: " << data.size(); 
+
+    data = data.subarr(1); // Remove the request type byte
+
+    switch(reqType) {
+    case ClientRequestType::ExecuteCommand:
+        return HandleExecutionRequest(client, data);
+    case ClientRequestType::ServiceMgrCommand:
+        return false;
+    case ClientRequestType::RuleEngineCommand:
+        return ProcessRuleOperation(client, data);
+    default: {
+        logt.error() << "Unknown client request type: " << static_cast<int>(reqType);
+        return false;
+    }
+    }
 }
 
 DWORD WINAPI PipeListenerThread(LPVOID param) {
@@ -576,7 +711,11 @@ VOID WINAPI ServiceMain(DWORD argc, LPTSTR* argv) {
     logt::addfile(platform::executable_dir()/"autosudo_service.log", true);
     logt::claim("ServiceMain");
 
-    auth::authlist.load();
+    // auth::authlist.load();
+
+    ApprovalEngine engine; // Create engine instance
+
+    engine.loadFile();
 
     serviceStatusHandle = RegisterServiceCtrlHandler(L"AutoSudoService", ServiceCtrlHandler);
     
@@ -619,6 +758,11 @@ VOID WINAPI ServiceMain(DWORD argc, LPTSTR* argv) {
     
     // 清理
     CloseHandle(serviceStopEvent);
+    // Manual save on service stop.
+    if(!engine.save()) {
+        logt.error() << "Failed to save approval rules while stopping service.";
+    }
+
     serviceStatus.dwCurrentState = SERVICE_STOPPED;
     SetServiceStatus(serviceStatusHandle, &serviceStatus);
     
@@ -635,8 +779,8 @@ int wmain(int argc, wchar_t** argv) {
     if (argc > 1 && std::wstring(argv[1]) == L"--debug") {
         logt::addfile("autosudo_service_debug.log", true);
         logt::stdcout(true, true); // Enable console logging
-        auth::authlist.load();
-        token::setNonServiceMode(true); // Prevent token from failing when not under session 0.
+        // auth::authlist.load();
+        wintoken::setNonServiceMode(true); // Prevent token from failing when not under session 0.
 
         logt::setFilterLevel(LogLevel::Debug);
 
@@ -649,8 +793,15 @@ int wmain(int argc, wchar_t** argv) {
         logt::shutdown();
         return 0;
     } else {
-        token::setNonServiceMode(false);
+        // 常规服务模式
+        wintoken::setNonServiceMode(false);
         logt::addfile("autosudo_service.log", true);
+
+        // If debug flag file detected, set log level to debug.
+        // This allows debugging in service mode.
+        if(fs::exists(platform::executable_dir() / "debug.flag")) {
+            logt::setFilterLevel(LogLevel::Debug);
+        }
         
         // 服务模式
         wchar_t serviceName[] = L"AutoSudoService";

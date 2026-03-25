@@ -19,7 +19,7 @@ public:
     int Run();
 
 private:
-    int RunProcess(libpipe::pipe_server_client&& msgClient, const ProcessContext& pc);
+    int RunProcess(libpipe::pipe_server_client&& msgClient, const AutoSudoRequest& request);
 
 private:
     std::string m_name, m_inputStreamName, m_outputStreamName;

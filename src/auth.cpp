@@ -136,7 +136,7 @@ void list::insert(const fs::path &path, AuthLevel al) {
 
     std::bytearray content;
     if(content.readAllFromStream(ifs)) {
-        ad.sha = sha256::getMessageDigest(content);
+        ad.sha = scl2::sha256::getMessageDigest(content);
         ifs.close();
 
         insert(ad);
@@ -192,7 +192,7 @@ bool list::verifyHash(const fs::path &path, const std::bytearray &expected)
         return false;
     }
     
-    std::bytearray actualSha = sha256::getMessageDigest(content);
+    std::bytearray actualSha = scl2::sha256::getMessageDigest(content);
     return actualSha == expected;
 }
 

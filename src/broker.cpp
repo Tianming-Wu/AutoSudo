@@ -13,7 +13,7 @@
 #include <SharedCppLib2/platform.hpp>
 
 PSECURITY_DESCRIPTOR CreatePipeSecurity();
-std::wstring MakeFullCommandLine(const ProcessContext& context);
+std::wstring MakeFullCommandLine(const AutoSudoRequest& request);
 
 Broker::Broker(const std::string& pipeName, const std::string &inputStreamName, const std::string &outputStreamName, const std::bytearray& token)
     : m_name(pipeName), m_inputStreamName(inputStreamName), m_outputStreamName(outputStreamName), m_token(token)
@@ -71,9 +71,9 @@ int Broker::Run()
         };
 
         if(client.waitForReadyRead(std::chrono::milliseconds(500))) {
-            ProcessContext context;
-            context = ProcessContext::Deserialize(client.readAll().toStdWString());
-            logt.debug() << "Received command: " << context.program << ", args: " << context.arguments.xjoin();
+            std::bytearray data = client.readAll();
+            AutoSudoRequest request = AutoSudoRequest::load(data);
+            logt.debug() << "Received command: " << request.executableFullPath << ", args: " << request.arguments.xjoin();
 
             // notify client to be ready for later streamed connection
             client.write(std::bytearray(BrokerResponse::Success));
@@ -83,7 +83,7 @@ int Broker::Run()
             client.write(std::bytearray(m_outputStreamName));
 
             // client must be moved and cannot be copied.
-            return RunProcess(std::move(client), context);
+            return RunProcess(std::move(client), request);
         } else {
             logt.error() << "Client did not send data within timeout.";
             return 1;
@@ -96,7 +96,7 @@ int Broker::Run()
     return 0;
 }
 
-int Broker::RunProcess(libpipe::pipe_server_client&& msgClient, const ProcessContext &pc)
+int Broker::RunProcess(libpipe::pipe_server_client&& msgClient, const AutoSudoRequest &request)
 {
     LOGT_LOCAL("Broker::RunProcess");
 
@@ -124,7 +124,7 @@ int Broker::RunProcess(libpipe::pipe_server_client&& msgClient, const ProcessCon
 
     // 2) 创建伪控制台
     HPCON hPC;
-    COORD size{ SHORT(pc.ConsoleX), SHORT(pc.ConsoleY) };
+    COORD size{ SHORT(request.ihConsoleX), SHORT(request.ihConsoleY) };
     HRESULT hr = CreatePseudoConsole(size, inRead, outWrite, 0, &hPC);
     
     if (FAILED(hr)) {
@@ -161,7 +161,7 @@ int Broker::RunProcess(libpipe::pipe_server_client&& msgClient, const ProcessCon
     // 注意，此时 Broker 已经被以管理员权限启动了，所以它有权限访问所有会话的信息。
     // 我们可以根据 ProcessContext 中的 sessionId 来决定目标进程应该运行在哪个会话中。
 
-    DWORD targetSessionId = pc.sessionId;
+    DWORD targetSessionId = request.targetSessionId;
 
     // 检查当前的会话 id 和目标 sessionid 是否匹配
     
@@ -190,7 +190,7 @@ int Broker::RunProcess(libpipe::pipe_server_client&& msgClient, const ProcessCon
 
     // 4) 启动目标进程（绑定到 ConPTY）
     PROCESS_INFORMATION pi{};
-    std::wstring cmd = MakeFullCommandLine(pc);
+    std::wstring cmd = MakeFullCommandLine(request);
     
     BOOL success = CreateProcessW(
         nullptr,
@@ -199,7 +199,7 @@ int Broker::RunProcess(libpipe::pipe_server_client&& msgClient, const ProcessCon
         FALSE,
         EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
         envBlock,
-        pc.workingDirectory.empty() ? nullptr : pc.workingDirectory.c_str(),
+        request.workingDirectory.empty() ? nullptr : request.workingDirectory.c_str(),
         &si.StartupInfo,
         &pi
     );
@@ -400,8 +400,8 @@ PSECURITY_DESCRIPTOR CreatePipeSecurity() {
     return nullptr;
 }
 
-std::wstring MakeFullCommandLine(const ProcessContext& context) {
-    std::wstringlist args = context.arguments;
-    args.insert(args.begin(), context.program);
+std::wstring MakeFullCommandLine(const AutoSudoRequest& request) {
+    std::wstringlist args = request.arguments;
+    args.insert(args.begin(), request.executableFullPath);
     return args.xjoin();
 }

@@ -14,15 +14,40 @@ int cleanup(const int &ret) {
 }
 
 AuthUIType getType(const std::wstring& typestr) {
-    for(int w = AuthUIType::ConfirmNew; w != AuthUIType::_sizetag; w++) {
+    for(int w = 0; w != 2; w++) {
         if(typestr == AuthUITypeStr[w]) return static_cast<AuthUIType>(w);
     }
-    return AuthUIType::_sizetag;
+    return static_cast<AuthUIType>(2); // Invalid type, should not happen
+}
+
+bool IsUserAnAdmin() {
+    BOOL isAdmin = FALSE;
+    PSID adminGroup = nullptr;
+
+    // Create a SID for the Administrators group.
+    SID_IDENTIFIER_AUTHORITY ntAuthority = SECURITY_NT_AUTHORITY;
+    if (!AllocateAndInitializeSid(&ntAuthority, 2, SECURITY_BUILTIN_DOMAIN_RID,
+                                  DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &adminGroup)) {
+        return false;
+    }
+
+    // Check if the current token has the admin SID.
+    if (!CheckTokenMembership(nullptr, adminGroup, &isAdmin)) {
+        isAdmin = FALSE;
+    }
+
+    FreeSid(adminGroup);
+    return isAdmin == TRUE;
 }
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow) {
     // 使用Per-Monitor V2 DPI感知（Windows 10 1703+）
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+
+    // 如果是以非管理员权限启动，禁止继续执行。服务负责以管理员权限启动此程序，这是利用 UI 隔离的安全设计
+    if (!IsUserAnAdmin()) {
+        return cleanup(1);
+    }
 
     // 解析命令行参数
     int argc;
@@ -43,33 +68,17 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     std::wstring title = L"AutoSudo 权限请求";
 
     switch(uiType) {
-    case ConfirmNew:
-        message = L"以下程序不在允许列表中：\n\n"
+    case NoRuleMatched:
+        message = L"没有规则匹配程序：\n\n"
                   L"程序: " + programPath + L"\n\n"
                   L"请求权限级别: " + authLevel + L"\n\n"
                   L"是否允许执行？";
         break;
-    case ConfirmRaise:
+    case InsufficientLevel:
         message = L"程序需要提升权限级别：\n\n"
                   L"程序: " + programPath + L"\n\n"
                   L"当前允许级别不足，请求提升至: " + authLevel + L"\n\n"
                   L"是否同意提升权限？";
-        break;
-    case ConfirmHashRebuild:
-        message = L"文件完整性验证失败：\n\n"
-                  L"程序: " + programPath + L"\n\n"
-                  L"请求权限级别: " + authLevel + L"\n\n"
-                  L"文件已被修改，是否允许执行更新后的程序？\n";
-        break;
-    case ConfirmDeletion:
-        title = L"AutoSudo 权限删除";
-        message = L"删除程序授权：\n\n"
-                  L"程序: " + programPath + L"\n\n"
-                  L"授权级别: " + authLevel + L"\n\n"
-                  L"您可以：\n"
-                  L"  [是(Y)]     - 删除此授权\n"
-                  L"  [否(N)]     - 保留授权\n"
-                  L"  [取消(C)]   - 取消删除\n";
         break;
     
     default:
@@ -80,33 +89,33 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     
     // 设置对话框图标
     UINT iconType = MB_ICONQUESTION;
-    int result = 1; // 默认拒绝
+    int result = static_cast<int>(AuthUIResult::Deny); // 默认拒绝
     
-    if (uiType == ConfirmDeletion) {
-        // ConfirmDeletion 使用三按钮对话框
-        // MB_YESNOCANCEL: Yes(6), No(7), Cancel(2)
-        int msgResult = MessageBox(nullptr, message.c_str(), title.c_str(), 
-                                   MB_YESNOCANCEL | iconType | MB_SYSTEMMODAL);
+    // if (uiType == ConfirmDeletion) {
+    //     // ConfirmDeletion 使用三按钮对话框
+    //     // MB_YESNOCANCEL: Yes(6), No(7), Cancel(2)
+    //     int msgResult = MessageBox(nullptr, message.c_str(), title.c_str(), 
+    //                                MB_YESNOCANCEL | iconType | MB_SYSTEMMODAL);
         
-        switch(msgResult) {
-            case IDYES:
-                result = static_cast<int>(AuthUIResult::Delete);  // 2 - 删除
-                break;
-            case IDNO:
-                result = static_cast<int>(AuthUIResult::Allow);   // 0 - 保留（允许通过）
-                break;
-            case IDCANCEL:
-                result = static_cast<int>(AuthUIResult::Deny);    // 1 - 拒绝（取消）
-                break;
-        }
-    } else {
+    //     switch(msgResult) {
+    //         case IDYES:
+    //             result = static_cast<int>(AuthUIResult::Delete);  // 2 - 删除
+    //             break;
+    //         case IDNO:
+    //             result = static_cast<int>(AuthUIResult::Allow);   // 0 - 保留（允许通过）
+    //             break;
+    //         case IDCANCEL:
+    //             result = static_cast<int>(AuthUIResult::Deny);    // 1 - 拒绝（取消）
+    //             break;
+    //     }
+    // } else {
         // 其他类型使用两按钮对话框
         int msgResult = MessageBox(nullptr, message.c_str(), title.c_str(), 
                                    MB_YESNO | iconType | MB_SYSTEMMODAL);
         
         result = (msgResult == IDYES) ? static_cast<int>(AuthUIResult::Allow) 
                                       : static_cast<int>(AuthUIResult::Deny);
-    }
+    // }
 
     return cleanup(result);
 }

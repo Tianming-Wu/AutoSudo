@@ -1,10 +1,10 @@
-#include "token.hpp"
+#include "wintoken.hpp"
 
 #include <userenv.h>
 #include <wtsapi32.h>
 #include <SharedCppLib2/platform.hpp>
 
-namespace token {
+namespace wintoken {
 
 namespace {
 bool g_nonServiceMode = false;
@@ -35,7 +35,7 @@ bool isNonServiceMode() {
     return g_nonServiceMode;
 }
 
-HANDLE getSystemToken(const ProcessContext& context) {
+HANDLE getSystemToken(const AutoSudoRequest& request) {
     LOGT_LOCAL("getSystemToken");
 
     HANDLE systemToken = nullptr;
@@ -56,11 +56,11 @@ HANDLE getSystemToken(const ProcessContext& context) {
     return duplicatedToken;
 }
 
-HANDLE getUserToken(const ProcessContext& context) {
+HANDLE getUserToken(const AutoSudoRequest& request) {
     LOGT_LOCAL("getUserToken");
 
     HANDLE userToken = nullptr;
-    if (!WTSQueryUserToken(context.sessionId, &userToken)) {
+    if (!WTSQueryUserToken(request.targetSessionId, &userToken)) {
         if (!g_nonServiceMode) {
             logt.error() << "WTSQueryUserToken failed: " << platform::windows::TranslateLastError();
             return nullptr;
@@ -77,10 +77,10 @@ HANDLE getUserToken(const ProcessContext& context) {
     return userToken;
 }
 
-HANDLE getAdminToken(const ProcessContext& context) {
+HANDLE getAdminToken(const AutoSudoRequest& request) {
     LOGT_LOCAL("getAdminToken");
 
-    HANDLE userToken = getUserToken(context);
+    HANDLE userToken = getUserToken(request);
     if (userToken == nullptr) {
         logt.error() << "getUserToken failed while acquiring admin token.";
         return nullptr;
@@ -122,4 +122,20 @@ HANDLE getAdminToken(const ProcessContext& context) {
     return elevatedToken;
 }
 
-} // namespace token
+HANDLE getToken(PermissionLevel level, const AutoSudoRequest &request)
+{
+    LOGT_LOCAL("wintoken::getToken");
+    switch(level) {
+    case PermissionLevel::User:
+        return getUserToken(request);
+    case PermissionLevel::Admin:
+        return getAdminToken(request);
+    case PermissionLevel::System:
+        return getSystemToken(request);
+    default:
+        logt.error() << "Invalid permission level requested: " << static_cast<int>(level);
+        return nullptr;
+    }
+}
+
+} // namespace wintoken

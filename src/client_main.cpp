@@ -75,10 +75,30 @@ std::wstring ResolveExecutablePath(const std::wstring& commandLine) {
     return L""; // 未找到
 }
 
-int ExecuteCommand(const std::wstring& commandLine, AuthLevel authLevel = AuthLevel::Admin, bool deleteAuth = false) {
+int StartupFallback(const std::wstring& commandLine, PermissionLevel permLevel = PermissionLevel::Admin){
+    LOGT_LOCAL("StartupFallback");
+    // 此函数用于在服务未运行的时候，使用传统 UAC 方式提权启动目标程序，避免静默失败。
+
+    // logt.info() << "Using fallback mode";
+
+    SHELLEXECUTEINFOW sei = { sizeof(sei) };
+    sei.lpVerb = L"runas"; // 以管理员权限运行
+    sei.lpFile = L"cmd.exe"; // 使用 cmd.exe 来执行命令行
+    sei.lpParameters = (L"/c " + commandLine).c_str(); // 将命令行作为参数传递给 cmd.exe
+    sei.nShow = SW_HIDE; // 隐藏窗口
+    
+    if (!ShellExecuteExW(&sei)) {
+        logt.error() << "Fallback execution failed: " << platform::windows::TranslateLastError();
+        return 1;
+    }
+
+    return 0; // 成功启动
+}
+
+int ExecuteCommand(const std::wstring& commandLine, PermissionLevel permLevel = PermissionLevel::Admin /*, bool deleteAuth = false*/) {
     LOGT_LOCAL("ExecuteCommand");
     // 构建进程上下文
-    ProcessContext context;
+    AutoSudoRequest request;
 
     std::wstringlist args = std::wstringlist::xsplit(commandLine, L" ", L"\"'");
 
@@ -90,23 +110,23 @@ int ExecuteCommand(const std::wstring& commandLine, AuthLevel authLevel = AuthLe
         return 1;
     }
 
-    context.program = resolvedPath;
-    context.arguments = args.subarr(1);
+    request.executableFullPath = resolvedPath;
+    request.arguments = args.subarr(1);
 
     // 获取当前工作目录
     wchar_t currentDir[MAX_PATH];
     GetCurrentDirectory(MAX_PATH, currentDir);
-    context.workingDirectory = currentDir;
+    request.workingDirectory = currentDir;
 
-    context.calledPath = currentDir;
+    request.calledPath = currentDir;
 
     // 设置认证级别和删除标志
-    context.requestedAuthLevel = authLevel;
-    context.deleteAuth = deleteAuth;
+    request.requestedPermissionLevel = permLevel;
+    // request.deleteAuth = deleteAuth;
 
     // 配置 ConPTY 参数
     #ifndef AUTOSUDO_GUI
-    context.inheritConsole = true; // 继承当前控制台
+    request.inheritConsole = true; // 继承当前控制台
     
     // 设置控制台为 UTF-8 模式以正确显示 ConPTY 输出
     SetConsoleCP(CP_UTF8);
@@ -118,19 +138,24 @@ int ExecuteCommand(const std::wstring& commandLine, AuthLevel authLevel = AuthLe
     // 获取当前控制台窗口大小
     CONSOLE_SCREEN_BUFFER_INFO csbi;
     if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
-        context.ConsoleX = csbi.srWindow.Right - csbi.srWindow.Left + 1;
-        context.ConsoleY = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+        request.ihConsoleX = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+        request.ihConsoleY = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
     } else {
         // 默认值
-        context.ConsoleX = 80;
-        context.ConsoleY = 25;
+        logt.warn() << "Failed to get console size, using default 80x25.";
+        request.ihConsoleX = 80;
+        request.ihConsoleY = 25;
     }
 
     #endif
 
     // 获取当前会话ID
-    context.sessionId = ::WTSGetActiveConsoleSessionId();
-    context.useCurrentSession = true;
+    if ((request.targetSessionId = ::WTSGetActiveConsoleSessionId()) != 0xFFFFFFFF) {
+        logt.debug() << "Current active session ID: " << request.targetSessionId;
+        request.useCurrentSession = true;
+    } else {
+        logt.warn() << "Failed to get active session ID.";
+    }
 
     libpipe::pipe_client client(R"(\\.\pipe\AutoSudoPipe)");
 
@@ -143,12 +168,14 @@ int ExecuteCommand(const std::wstring& commandLine, AuthLevel authLevel = AuthLe
                   L"AutoSudo 连接错误",
                   MB_OK | MB_ICONERROR);
         #endif
-        return 1;
+
+        logt.info() << "Falling back to traditional UAC method.";
+        return StartupFallback(commandLine, permLevel);
     }
 
     logt.debug() << "Connected to AutoSudo service.";
 
-    if (client.write(std::bytearray::fromStdWString(context.Serialize())) == 0) {
+    if (client.write(std::bytearray(ClientRequestType::ExecuteCommand) + AutoSudoRequest::dump(request)) == 0) {
         logt.error() << "Failed to send command to AutoSudo service.";
         #ifdef AUTOSUDO_GUI
         MessageBox(nullptr,
@@ -210,8 +237,8 @@ int ExecuteCommand(const std::wstring& commandLine, AuthLevel authLevel = AuthLe
 
     logt.debug() << "Connected to broker message pipe.";
 
-    if (brokerMsgClient.write(std::bytearray::fromStdWString(context.Serialize())) == 0) {
-        logt.error() << "Failed to send ProcessContext to broker.";
+    if (brokerMsgClient.write(AutoSudoRequest::dump(request)) == 0) {
+        logt.error() << "Failed to send AutoSudoRequest to broker.";
         return 1;
     }
 
@@ -456,7 +483,7 @@ int wmain(int argc, wchar_t** argv) {
         logt::stdcout(true, true);
     }
 
-    AuthLevel authLevel = AuthLevel::Admin; // 默认管理员权限
+    PermissionLevel permLevel = PermissionLevel::Admin; // 默认管理员权限
     std::wstring commandLine = args.xjoinArgs();
     bool exec = true;
     bool deleteAuth = false;
@@ -466,13 +493,13 @@ int wmain(int argc, wchar_t** argv) {
     }
 
     if (args.addFlag(L"user")) {
-        authLevel = AuthLevel::User;
+        permLevel = PermissionLevel::User;
         commandLine = args.anyAfter(L"user");
     } else if (args.addFlag(L"system")) {
-        authLevel = AuthLevel::System;
+        permLevel = PermissionLevel::System;
         commandLine = args.anyAfter(L"system");
     } else if (args.addFlag(L"admin")) {
-        authLevel = AuthLevel::Admin;
+        permLevel = PermissionLevel::Admin;
         commandLine = args.anyAfter(L"admin");
     } else if (args.addFlag(L"delete")) {
         // --delete 标志，表示删除授权
@@ -501,7 +528,7 @@ int wmain(int argc, wchar_t** argv) {
             result = 1;
         } else {
             // 执行命令
-            result = ExecuteCommand(commandLine, authLevel, deleteAuth);
+            result = ExecuteCommand(commandLine, permLevel/*, deleteAuth*/);
         }
     }
 

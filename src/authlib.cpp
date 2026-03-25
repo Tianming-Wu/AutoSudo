@@ -1,8 +1,8 @@
 #include "authlib.hpp"
 
+#include <SharedCppLib2/platform_windows.hpp>
 #include <wintrust.h>
 #include <softpub.h>
-#include <SharedCppLib2/platform_windows.hpp>
 
 namespace authlib {
 
