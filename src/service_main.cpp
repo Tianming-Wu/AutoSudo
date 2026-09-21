@@ -731,7 +731,6 @@ void MainServiceLoop() {
 VOID WINAPI ServiceMain(DWORD argc, LPTSTR* argv) {
     LOGT_LOCAL("ServiceMain");
 
-    logt::addfile(platform::executable_dir()/"autosudo_service.log", true);
     logt::claim("ServiceMain");
 
     // auth::authlist.load();
@@ -800,7 +799,7 @@ int wmain(int argc, wchar_t** argv) {
     logt::claim("ServiceMain");
     // 如果是控制台模式运行（调试用）
     if (argc > 1 && std::wstring(argv[1]) == L"--debug") {
-        logt::addfile("autosudo_service_debug.log", true);
+        logt::addfile(platform::executable_dir()/"autosudo_service_debug.log", true);
         logt::stdcout(true, true); // Enable console logging
         // auth::authlist.load();
         wintoken::setNonServiceMode(true); // Prevent token from failing when not under session 0.
@@ -818,7 +817,7 @@ int wmain(int argc, wchar_t** argv) {
     } else {
         // 常规服务模式
         wintoken::setNonServiceMode(false);
-        logt::addfile("autosudo_service.log", true);
+        logt::addfile(platform::executable_dir()/"autosudo_service.log", true);
 
         // If debug flag file detected, set log level to debug.
         // This allows debugging in service mode.
@@ -835,7 +834,7 @@ int wmain(int argc, wchar_t** argv) {
     
         if (!StartServiceCtrlDispatcher(serviceTable)) {
             logt::claim("AutoSudoService");
-            logt::addfile("autosudo_service_error.log", true);
+            logt::addfile(platform::executable_dir()/"autosudo_service_error.log", true);
             logt.error() << "StartServiceCtrlDispatcher failed: " << platform::windows::TranslateLastError();
 
             logt::shutdown();
