@@ -9,6 +9,7 @@
 #include <SharedCppLib2/logt.hpp>
 #include <SharedCppLib2/basics.hpp>
 #include <SharedCppLib2/sha256.hpp>
+#include <SharedCppLib2/string.hpp>
 
 #include "authlib.hpp"
 
@@ -20,10 +21,10 @@ bool ApprovalRule::evaluate(const ApprovalRequest &request) const
 
     switch(type) {
     case Type::Constant:                return true; // Always matches
-    case Type::DirectoryRule:           return __str_e_evaluate(request.executable.parent_path().string());
-    case Type::FullPathRule:            return __str_e_evaluate(request.executable.string());
-    case Type::ExecutableNameRule:      return __str_e_evaluate(request.executable.filename().string());
-    case Type::StartupDirectoryRule:    return __str_e_evaluate(request.startupDirectory.string());
+    case Type::DirectoryRule:           return __str_e_evaluate(scl2::wstr_to_str(request.executable.parent_path().wstring()));
+    case Type::FullPathRule:            return __str_e_evaluate(scl2::wstr_to_str(request.executable.wstring()));
+    case Type::ExecutableNameRule:      return __str_e_evaluate(scl2::wstr_to_str(request.executable.filename().wstring()));
+    case Type::StartupDirectoryRule:    return __str_e_evaluate(scl2::wstr_to_str(request.startupDirectory.wstring()));
     case Type::HashRule:                return __hash_fs_evaluate(request.executable);
     case Type::SidRule:                 return false;
     case Type::SessionRule:             return false;

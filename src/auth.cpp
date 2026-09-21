@@ -5,6 +5,7 @@
 #include <SharedCppLib2/platform.hpp>
 #include <SharedCppLib2/sha256.hpp>
 #include <SharedCppLib2/stringlist.hpp>
+#include <SharedCppLib2/string.hpp>
 
 namespace auth {
 
@@ -73,9 +74,9 @@ void list::load() {
         }
         
         authdat ad;
-        ad.targetPath = fs::path(pathStr);
+        ad.targetPath = fs::path(scl2::str_to_wstr(pathStr));
         ad.level = al;
-        ad.sha = std::bytearray::fromHex(shaStr);
+        ad.sha = scl2::bytearray::fromHex(shaStr);
         
         if(ad.sha.empty()) {
             logt.warn() << "Failed to parse SHA256 at line " << lineNumber;
@@ -104,7 +105,7 @@ void list::save() {
     ofs << std::endl;
     
     for(const auto& [path, data] : m_authlist) {
-        ofs << path.string() << "|" << std::to_string(static_cast<int>(data.level)) << "|" << data.sha.toHex() << std::endl;
+        ofs << scl2::wstr_to_str(path.wstring()) << "|" << std::to_string(static_cast<int>(data.level)) << "|" << data.sha.toHex() << std::endl;
     }
     
     ofs.close();

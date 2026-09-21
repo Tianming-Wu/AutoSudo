@@ -13,7 +13,8 @@
 #include <map>
 #include <chrono>
 
-#include <libpipe.hpp>
+#include <SharedCppLib2/pipe.hpp>
+#include <SharedCppLib2/string.hpp>
 
 namespace AutoSudoSdk {
 
@@ -23,14 +24,14 @@ namespace AutoSudoSdk {
 uint16_t CreateConstantRule(Rule::EType etype, Rule::Action action, PermissionLevel allowUpTo){
     RuleClient client;
     // For constant rule, the payload is empty.
-    std::bytearray payload;
+    scl2::bytearray payload;
     return client.createRule(Rule::Type::Constant, etype, action, allowUpTo, payload);
 }
 
 uint16_t CreateDirectoryRule(Rule::EType etype, Rule::Action action, PermissionLevel allowUpTo, const fs::path& value){
     RuleClient client;
 
-    std::bytearray payload = std::bytearray::fromStdString(value.string());
+    scl2::bytearray payload = scl2::bytearray::fromStdString(scl2::wstr_to_str(value.wstring()));
 
     return client.createRule(Rule::Type::DirectoryRule, etype, action, allowUpTo, payload);
 }
@@ -38,7 +39,7 @@ uint16_t CreateDirectoryRule(Rule::EType etype, Rule::Action action, PermissionL
 uint16_t CreateFullPathRule(Rule::EType etype, Rule::Action action, PermissionLevel allowUpTo, const fs::path& value){
     RuleClient client;
 
-    std::bytearray payload = std::bytearray::fromStdString(value.string());
+    scl2::bytearray payload = scl2::bytearray::fromStdString(scl2::wstr_to_str(value.wstring()));
 
     return client.createRule(Rule::Type::FullPathRule, etype, action, allowUpTo, payload);
 }
@@ -54,7 +55,7 @@ uint16_t CreateExecutableNameRule(Rule::EType etype, Rule::Action action, Permis
 uint16_t CreateStartupDirectoryRule(Rule::EType etype, Rule::Action action, PermissionLevel allowUpTo, const fs::path& value){
     RuleClient client;
 
-    std::bytearray payload = std::bytearray::fromStdString(value.string());
+    scl2::bytearray payload = scl2::bytearray::fromStdString(scl2::wstr_to_str(value.wstring()));
 
     return client.createRule(Rule::Type::StartupDirectoryRule, etype, action, allowUpTo, payload);
 }
@@ -101,7 +102,7 @@ uint16_t CreateParametersRule(Rule::EType etype, Rule::Action action, Permission
 uint16_t CreateCustomScriptRule(Rule::EType etype, Rule::Action action, PermissionLevel allowUpTo, const fs::path& value) {
     RuleClient client;
 
-    std::bytearray payload = std::bytearray::fromStdString(value.string()); // This is the script path.
+    scl2::bytearray payload = scl2::bytearray::fromStdString(scl2::wstr_to_str(value.wstring())); // This is the script path.
 
     return client.createRule(Rule::Type::CustomScriptRule, etype, action, allowUpTo, payload);
 }
@@ -157,49 +158,49 @@ bool ModifyRule(uint16_t uid, Rule::Type type, Rule::EType etype, Rule::Action a
 bool ModifyConstantRule(uint16_t uid, Rule::EType etype, Rule::Action action, PermissionLevel allowUpTo,
                         std::optional<uint16_t> moveToOrder)
 {
-    std::bytearray payload;
+    scl2::bytearray payload;
     return ModifyRule(uid, Rule::Type::Constant, etype, action, allowUpTo, payload, moveToOrder);
 }
 
 bool ModifyDirectoryRule(uint16_t uid, Rule::EType etype, Rule::Action action, PermissionLevel allowUpTo,
                          const fs::path& value, std::optional<uint16_t> moveToOrder)
 {
-    std::bytearray payload = std::bytearray::fromStdString(value.string());
+    scl2::bytearray payload = scl2::bytearray::fromStdString(scl2::wstr_to_str(value.wstring()));
     return ModifyRule(uid, Rule::Type::DirectoryRule, etype, action, allowUpTo, payload, moveToOrder);
 }
 
 bool ModifyFullPathRule(uint16_t uid, Rule::EType etype, Rule::Action action, PermissionLevel allowUpTo,
                         const fs::path& value, std::optional<uint16_t> moveToOrder)
 {
-    std::bytearray payload = std::bytearray::fromStdString(value.string());
+    scl2::bytearray payload = scl2::bytearray::fromStdString(scl2::wstr_to_str(value.wstring()));
     return ModifyRule(uid, Rule::Type::FullPathRule, etype, action, allowUpTo, payload, moveToOrder);
 }
 
 bool ModifyExecutableNameRule(uint16_t uid, Rule::EType etype, Rule::Action action, PermissionLevel allowUpTo,
                               const std::string& value, std::optional<uint16_t> moveToOrder)
 {
-    std::bytearray payload = std::bytearray::fromStdString(value);
+    scl2::bytearray payload = scl2::bytearray::fromStdString(value);
     return ModifyRule(uid, Rule::Type::ExecutableNameRule, etype, action, allowUpTo, payload, moveToOrder);
 }
 
 bool ModifyStartupDirectoryRule(uint16_t uid, Rule::EType etype, Rule::Action action, PermissionLevel allowUpTo,
                                 const fs::path& value, std::optional<uint16_t> moveToOrder)
 {
-    std::bytearray payload = std::bytearray::fromStdString(value.string());
+    scl2::bytearray payload = scl2::bytearray::fromStdString(scl2::wstr_to_str(value.wstring()));
     return ModifyRule(uid, Rule::Type::StartupDirectoryRule, etype, action, allowUpTo, payload, moveToOrder);
 }
 
 bool ModifySidRule(uint16_t uid, Rule::EType etype, Rule::Action action, PermissionLevel allowUpTo,
                    const std::string& value, std::optional<uint16_t> moveToOrder)
 {
-    std::bytearray payload = std::bytearray::fromStdString(value);
+    scl2::bytearray payload = scl2::bytearray::fromStdString(value);
     return ModifyRule(uid, Rule::Type::SidRule, etype, action, allowUpTo, payload, moveToOrder);
 }
 
 bool ModifySessionRule(uint16_t uid, Rule::EType etype, Rule::Action action, PermissionLevel allowUpTo,
                        unsigned int value, std::optional<uint16_t> moveToOrder)
 {
-    std::bytearray payload;
+    scl2::bytearray payload;
     payload.append(value);
     return ModifyRule(uid, Rule::Type::SessionRule, etype, action, allowUpTo, payload, moveToOrder);
 }
@@ -207,35 +208,35 @@ bool ModifySessionRule(uint16_t uid, Rule::EType etype, Rule::Action action, Per
 bool ModifyParameterRule(uint16_t uid, Rule::EType etype, Rule::Action action, PermissionLevel allowUpTo,
                          const std::string& value, std::optional<uint16_t> moveToOrder)
 {
-    std::bytearray payload = std::bytearray::fromStdString(value);
+    scl2::bytearray payload = scl2::bytearray::fromStdString(value);
     return ModifyRule(uid, Rule::Type::ParameterRule, etype, action, allowUpTo, payload, moveToOrder);
 }
 
 bool ModifyParametersRule(uint16_t uid, Rule::EType etype, Rule::Action action, PermissionLevel allowUpTo,
                           const std::string& value, std::optional<uint16_t> moveToOrder)
 {
-    std::bytearray payload = std::bytearray::fromStdString(value);
+    scl2::bytearray payload = scl2::bytearray::fromStdString(value);
     return ModifyRule(uid, Rule::Type::ParametersRule, etype, action, allowUpTo, payload, moveToOrder);
 }
 
 bool ModifyCustomScriptRule(uint16_t uid, Rule::EType etype, Rule::Action action, PermissionLevel allowUpTo,
                             const fs::path& value, std::optional<uint16_t> moveToOrder)
 {
-    std::bytearray payload = std::bytearray::fromStdString(value.string());
+    scl2::bytearray payload = scl2::bytearray::fromStdString(scl2::wstr_to_str(value.wstring()));
     return ModifyRule(uid, Rule::Type::CustomScriptRule, etype, action, allowUpTo, payload, moveToOrder);
 }
 
 bool ModifyHashRule(uint16_t uid, Rule::EType etype, Rule::Action action, PermissionLevel allowUpTo,
                     const std::string& value, std::optional<uint16_t> moveToOrder)
 {
-    std::bytearray payload = std::bytearray::fromHex(value);
+    scl2::bytearray payload = scl2::bytearray::fromHex(value);
     return ModifyRule(uid, Rule::Type::HashRule, etype, action, allowUpTo, payload, moveToOrder);
 }
 
 bool ModifyVoteRule(uint16_t uid, Rule::EType etype, Rule::Action action, PermissionLevel allowUpTo,
                     int value, std::optional<uint16_t> moveToOrder)
 {
-    std::bytearray payload;
+    scl2::bytearray payload;
     payload.append(value);
     return ModifyRule(uid, Rule::Type::VoteRule, etype, action, allowUpTo, payload, moveToOrder);
 }

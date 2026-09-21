@@ -396,7 +396,7 @@ bool CreateProcessInUserSession(const AutoSudoRequest& request, std::string* bro
             fullCommandLine += L"debug ";
         }
         
-        fullCommandLine += platform::stringToWstring(assignedPipe) + L" " + platform::stringToWstring(assignedToken);
+        fullCommandLine += scl2::str_to_wstr(assignedPipe) + L" " + scl2::str_to_wstr(assignedToken);
 
         if (brokerPipeName) *brokerPipeName = assignedPipe;
         if (brokerToken) *brokerToken = assignedToken;
