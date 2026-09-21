@@ -147,7 +147,6 @@ AutoSudo --uninstall  # 卸载服务
 - C++23 兼容编译器（推荐使用 MSVC 2022 版本，因为这个项目是在这个版本上开发的）
 - Windows SDK （10.0.19041.0 或更高版本）
 - [SharedCppLib2 库](https://github.com/Tianming-Wu/SharedCppLib2) 兼容版本（一般保持最新即可，会同步更新）
-- [LibPipe 库](https://github.com/Tianming-Wu/LibPipe) 兼容版本（一般保持最新即可，会同步更新）
 
 ## 项目结构
 
@@ -252,7 +251,6 @@ cmake --build . --config Release
 
 - **[AutoSudoGUI](https://github.com/Tianming-Wu/AutoSudoGUI)** - AutoSudo 的 GUI 管理工具，用于创建和编辑规则
 - **[SharedCppLib2](https://github.com/Tianming-Wu/SharedCppLib2)** - 项目依赖的 C++ 跨平台工具库，包含各种强大的实用功能，是个人开发投入精力最多的主力库。
-- **[LibPipe](https://github.com/Tianming-Wu/LibPipe)** - 项目依赖的命名管道库。这是一个轻量级的 C++ 命名管道通信库，提供了简单的接口用于进程间通信。暂时仅支持 Windows。
 
 ## 许可证
 

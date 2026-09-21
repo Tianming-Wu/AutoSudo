@@ -23,28 +23,27 @@ add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/execution-charset:utf-8>")
 add_compile_definitions(LOGT_WCHAR_SUPPORT)
 
 find_package(SharedCppLib2 REQUIRED)
-find_package(libpipe REQUIRED)
 
 add_library(authlib STATIC src/authlib.cpp)
 target_link_libraries(authlib wintrust SharedCppLib2::api)
 # add_library(auth STATIC src/auth.cpp)
-# target_link_libraries(auth PRIVATE SharedCppLib2::basic SharedCppLib2::sha256 SharedCppLib2::platform libpipe::libpipe)
+# target_link_libraries(auth PRIVATE SharedCppLib2::basic SharedCppLib2::sha256 SharedCppLib2::platform SharedCppLib2::pipe)
 
 add_library(protocol STATIC src/protocol.cpp)
 target_link_libraries(protocol PRIVATE SharedCppLib2::basic)
 
 # service
 add_executable(AutoSudoSvc src/service_main.cpp src/wintoken.cpp src/approval.cpp)
-target_link_libraries(AutoSudoSvc protocol authlib wtsapi32 userenv SharedCppLib2::logt SharedCppLib2::platform libpipe::libpipe SharedCppLib2::sha256 SharedCppLib2::singleinst) # auth
+target_link_libraries(AutoSudoSvc protocol authlib wtsapi32 userenv SharedCppLib2::logt SharedCppLib2::platform SharedCppLib2::pipe SharedCppLib2::sha256 SharedCppLib2::singleinst) # auth
 target_include_directories(AutoSudoSvc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 # client command-line version
 add_executable(AutoSudo src/client_main.cpp src/installer.cpp src/rule_client.cpp)
-target_link_libraries(AutoSudo protocol wtsapi32 SharedCppLib2::basic SharedCppLib2::logt SharedCppLib2::platform SharedCppLib2::arguments libpipe::libpipe)
+target_link_libraries(AutoSudo protocol wtsapi32 SharedCppLib2::basic SharedCppLib2::logt SharedCppLib2::platform SharedCppLib2::arguments SharedCppLib2::pipe)
 
 # client gui version
 add_executable(AutoSudoW src/client_main.cpp src/installer.cpp src/rule_client.cpp)
-target_link_libraries(AutoSudoW protocol comctl32 wtsapi32 SharedCppLib2::basic SharedCppLib2::logt SharedCppLib2::platform SharedCppLib2::arguments libpipe::libpipe)
+target_link_libraries(AutoSudoW protocol comctl32 wtsapi32 SharedCppLib2::basic SharedCppLib2::logt SharedCppLib2::platform SharedCppLib2::arguments SharedCppLib2::pipe)
 set_target_properties(AutoSudoW PROPERTIES WIN32_EXECUTABLE TRUE)
 target_compile_definitions(AutoSudoW PUBLIC AUTOSUDO_GUI)
 
@@ -54,7 +53,7 @@ set_target_properties(AuthUI PROPERTIES WIN32_EXECUTABLE TRUE)
 
 # broker
 add_executable(AutoSudoBroker src/broker_main.cpp src/broker.cpp)
-target_link_libraries(AutoSudoBroker protocol wtsapi32 userenv SharedCppLib2::logt SharedCppLib2::platform libpipe::libpipe) # auth
+target_link_libraries(AutoSudoBroker protocol wtsapi32 userenv SharedCppLib2::logt SharedCppLib2::platform SharedCppLib2::pipe) # auth
 set_target_properties(AutoSudoBroker PROPERTIES WIN32_EXECUTABLE TRUE)
 target_link_options(AutoSudoBroker PRIVATE /ENTRY:mainCRTStartup)
 
@@ -62,7 +61,7 @@ target_link_options(AutoSudoBroker PRIVATE /ENTRY:mainCRTStartup)
 
 # sdk
 add_library(AutoSudoSdk STATIC src/protocol.cpp src/sdk.cpp src/rule_client.cpp)
-target_link_libraries(AutoSudoSdk PUBLIC SharedCppLib2::basic)
+target_link_libraries(AutoSudoSdk PUBLIC SharedCppLib2::basic SharedCppLib2::pipe)
 target_include_directories(AutoSudoSdk PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
     $<INSTALL_INTERFACE:include/AutoSudoSdk>

@@ -8,7 +8,7 @@
 #include <wtsapi32.h>
 #include <functional>
 
-#include <libpipe.hpp>
+#include <SharedCppLib2/pipe.hpp>
 
 #include "protocol.hpp"
 // #include "pipeserver.hpp" // discarded module
@@ -164,7 +164,7 @@ int RequestUserConfirmation(const AutoSudoRequest& context, AuthUIType type) {
 }
 
 std::wstring MakeFullCommandLine(const AutoSudoRequest& request) {
-    std::wstringlist args = request.arguments;
+    scl2::wstringlist args = request.arguments;
     args.insert(args.begin(), request.executableFullPath);
     return args.xjoin();
 }
@@ -472,7 +472,7 @@ bool CreateProcessInUserSession(const AutoSudoRequest& request, std::string* bro
 }
 
 // Handle process execution request
-bool HandleExecutionRequest(libpipe::pipe_server_client& client, const std::bytearray& data) {
+bool HandleExecutionRequest(scl2::pipe::server_client& client, const scl2::bytearray& data) {
     LOGT_LOCAL("HandleExecutionRequest");
 
     // Handle program execution request
@@ -497,21 +497,21 @@ bool HandleExecutionRequest(libpipe::pipe_server_client& client, const std::byte
     // 发送响应
     if (success) {
         if (request.inheritConsole && !brokerToken.empty() && !brokerMsgPipe.empty()) {
-            client.write(std::bytearray(brokerToken));
-            client.write(std::bytearray(brokerMsgPipe));
+            client.write(scl2::bytearray(brokerToken));
+            client.write(scl2::bytearray(brokerMsgPipe));
 
-            if(!client.waitForAcknowledged(std::chrono::seconds(1))) {
+            if(!client.waitForFinished(std::chrono::seconds(1))) {
                 logt.warn() << "Client did not acknowledge broker info.";
             }
         } else {
-            client.write(std::bytearray::fromStdWString(L"SUCCESS: Process created"));
-            if(!client.waitForAcknowledged(std::chrono::seconds(1))) {
+            client.write(scl2::bytearray::fromStdWString(L"SUCCESS: Process created"));
+            if(!client.waitForFinished(std::chrono::seconds(1))) {
                 logt.warn() << "Client did not acknowledge broker info.";
             }
         }
     } else {
-        client.write(std::bytearray::fromStdWString(L"ERROR: Failed to create process"));
-        if(!client.waitForAcknowledged(std::chrono::seconds(1))) {
+        client.write(scl2::bytearray::fromStdWString(L"ERROR: Failed to create process"));
+        if(!client.waitForFinished(std::chrono::seconds(1))) {
             logt.warn() << "Client did not acknowledge execution error response.";
         }
     }
@@ -520,7 +520,7 @@ bool HandleExecutionRequest(libpipe::pipe_server_client& client, const std::byte
 }
 
 // Handle rule management operations
-bool ProcessRuleOperation(libpipe::pipe_server_client& client, const std::bytearray& data) {
+bool ProcessRuleOperation(scl2::pipe::server_client& client, const scl2::bytearray& data) {
     LOGT_LOCAL("ProcessRuleOperation");
     
     try {
@@ -589,7 +589,7 @@ bool ProcessRuleOperation(libpipe::pipe_server_client& client, const std::bytear
                 listResponse.rules = enginePtr->listRules();
                 logt.info() << "List operation returns " << listResponse.rules.size() << " rules";
                 client.write(listResponse.dump());
-                if(!client.waitForAcknowledged(std::chrono::seconds(1))) {
+                if(!client.waitForFinished(std::chrono::seconds(1))) {
                     logt.warn() << "Client did not acknowledge rule list response.";
                 }
                 return true;
@@ -603,7 +603,7 @@ bool ProcessRuleOperation(libpipe::pipe_server_client& client, const std::bytear
         
         // Send result
         client.write(result.dump());
-        if(!client.waitForAcknowledged(std::chrono::seconds(1))) {
+        if(!client.waitForFinished(std::chrono::seconds(1))) {
             logt.warn() << "Client did not acknowledge rule operation response.";
         }
         return true;
@@ -618,11 +618,11 @@ bool ProcessRuleOperation(libpipe::pipe_server_client& client, const std::bytear
     }
 }
 
-bool ProcessClientRequest(libpipe::pipe_server_client& client) {
+bool ProcessClientRequest(scl2::pipe::server_client& client) {
     LOGT_LOCAL("ProcessClientRequest");
 
     // 读取请求数据
-    std::bytearray data = client.readAll();
+    scl2::bytearray data = client.readAll();
     if (data.empty()) {
         if(client.broken()) {
             logt.error() << "Client connection is broken.";
@@ -658,9 +658,9 @@ DWORD WINAPI PipeListenerThread(LPVOID param) {
     LOGT_LOCAL("PipeListenerThread");
     logt.info() << "Pipe listener thread started";
 
-    libpipe::pipe_server server(R"(\\.\pipe\AutoSudoPipe)", libpipe::PermissionPresets::Everyone);
+    scl2::pipe::server server(R"(\\.\pipe\AutoSudoPipe)", scl2::pipe::permission_preset::Everyone);
 
-    server.setPipeMode(libpipe::PipeMode::Message);
+    server.setPipeMode(scl2::pipe::mode::Message);
     // Usually, 8KiB is enough for a single command.
 
     if(!server.start()) {

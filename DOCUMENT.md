@@ -1,17 +1,10 @@
 # Auto Sudo Document
 
 
-## Dependency Graph
-AutoSudo depends on two main libraries: LibPipe for inter-process communication and SharedCppLib2 for shared utilities. The following graph illustrates the dependencies:
+## Dependency
+- [SharedCppLib2](https://github.com/Tianming-Wu/SharedCppLib2)
 
-```mermaid
-graph TD
-  AutoSudo --> LibPipe
-  AutoSudo --> SharedCppLib2
-  LibPipe --> SharedCppLib2
-```
-
-To build the project yourself, you should follow the instructions in SharedCppLib2/doc/cmake to build and install SharedCppLib2 and LibPipe in sequence.
+To build the project yourself, you should follow the instructions in SharedCppLib2/doc/cmake to build and install SharedCppLib2.
 
 
 ## Command Line Usage

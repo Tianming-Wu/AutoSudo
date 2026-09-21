@@ -19,7 +19,7 @@ public:
 
     struct authdat {
         fs::path targetPath;
-        std::bytearray sha;
+        scl2::bytearray sha;
         AuthLevel level;
     };
 
@@ -33,7 +33,7 @@ public:
 
 protected:
     void insert(const authdat &dat);
-    bool verifyHash(const fs::path& path, const std::bytearray& expected);
+    bool verifyHash(const fs::path& path, const scl2::bytearray& expected);
 
 private:
     std::unordered_map<fs::path, authdat> m_authlist;

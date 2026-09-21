@@ -5,7 +5,7 @@
 #include <SharedCppLib2/platform_windows.hpp>
 #include <SharedCppLib2/bytearray.hpp>
 
-#include <libpipe.hpp>
+#include <SharedCppLib2/pipe.hpp>
 
 #include "protocol.hpp"
 
@@ -13,19 +13,19 @@
 class Broker
 {
 public:
-    Broker(const std::string& pipeName, const std::string &inputStreamName, const std::string &outputStreamName, const std::bytearray& token);
+    Broker(const std::string& pipeName, const std::string &inputStreamName, const std::string &outputStreamName, const scl2::bytearray& token);
     ~Broker();
 
     int Run();
 
 private:
-    int RunProcess(libpipe::pipe_server_client&& msgClient, const AutoSudoRequest& request);
+    int RunProcess(scl2::pipe::server_client&& msgClient, const AutoSudoRequest& request);
 
 private:
     std::string m_name, m_inputStreamName, m_outputStreamName;
-    std::bytearray m_token;
+    scl2::bytearray m_token;
 
-    libpipe::pipe_server msgServer, inputStreamServer, outputStreamServer; // Control, input, and output streams
+    scl2::pipe::server msgServer, inputStreamServer, outputStreamServer; // Control, input, and output streams
 
     // Handles for communication with child process.
     HANDLE inRead = nullptr, inWrite = nullptr;

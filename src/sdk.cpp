@@ -46,7 +46,7 @@ uint16_t CreateFullPathRule(Rule::EType etype, Rule::Action action, PermissionLe
 uint16_t CreateExecutableNameRule(Rule::EType etype, Rule::Action action, PermissionLevel allowUpTo, const std::string& value){
     RuleClient client;
 
-    std::bytearray payload = std::bytearray::fromStdString(value);
+    scl2::bytearray payload = scl2::bytearray::fromStdString(value);
 
     return client.createRule(Rule::Type::ExecutableNameRule, etype, action, allowUpTo, payload);
 }
@@ -62,7 +62,7 @@ uint16_t CreateStartupDirectoryRule(Rule::EType etype, Rule::Action action, Perm
 uint16_t CreateSidRule(Rule::EType etype, Rule::Action action, PermissionLevel allowUpTo, const std::string& value){
     RuleClient client;
 
-    std::bytearray payload = std::bytearray::fromStdString(value);
+    scl2::bytearray payload = scl2::bytearray::fromStdString(value);
 
     return client.createRule(Rule::Type::SidRule, etype, action, allowUpTo, payload);
 }
@@ -70,7 +70,7 @@ uint16_t CreateSidRule(Rule::EType etype, Rule::Action action, PermissionLevel a
 uint16_t CreateSessionRule(Rule::EType etype, Rule::Action action, PermissionLevel allowUpTo, unsigned int value){
     RuleClient client;
 
-    std::bytearray payload;
+    scl2::bytearray payload;
     payload.append(value);
 
     return client.createRule(Rule::Type::SessionRule, etype, action, allowUpTo, payload);
@@ -79,7 +79,7 @@ uint16_t CreateSessionRule(Rule::EType etype, Rule::Action action, PermissionLev
 uint16_t CreateParameterRule(Rule::EType etype, Rule::Action action, PermissionLevel allowUpTo, const std::string& value){
     RuleClient client;
 
-    std::bytearray payload = std::bytearray::fromStdString(value);
+    scl2::bytearray payload = scl2::bytearray::fromStdString(value);
 
     return client.createRule(Rule::Type::ParameterRule, etype, action, allowUpTo, payload);
 }
@@ -88,7 +88,7 @@ uint16_t CreateParametersRule(Rule::EType etype, Rule::Action action, Permission
     RuleClient client;
 
     // payload is a single regex that matches the parameters accroding to EType.
-    std::bytearray payload = std::bytearray::fromStdString(value);
+    scl2::bytearray payload = scl2::bytearray::fromStdString(value);
 
     return client.createRule(Rule::Type::ParametersRule, etype, action, allowUpTo, payload);
 }
@@ -116,27 +116,27 @@ uint16_t CreateHashRule(Rule::EType etype, Rule::Action action, PermissionLevel 
 
     // The value is expected to be a hex string representing the hash.
     // The payload is the raw bytes of the hash.
-    std::bytearray payload = std::bytearray::fromHex(value);
+    scl2::bytearray payload = scl2::bytearray::fromHex(value);
     
     return client.createRule(Rule::Type::HashRule, etype, action, allowUpTo, payload);
 }
 
 uint16_t CreateVoteRule(Rule::EType etype, Rule::Action action, PermissionLevel allowUpTo, int value){
     RuleClient client;
-    std::bytearray payload;
+    scl2::bytearray payload;
     payload.append(value);
     return client.createRule(Rule::Type::VoteRule, etype, action, allowUpTo, payload);
 }
 
 uint16_t CreateDigitalSignatureRule(Rule::EType etype, Rule::Action action, PermissionLevel allowUpTo /*, no payload */){
     RuleClient client;
-    std::bytearray payload; // No payload needed for this rule type.
+    scl2::bytearray payload; // No payload needed for this rule type.
     return client.createRule(Rule::Type::DigitalSignatureRule, etype, action, allowUpTo, payload);
 }
 
 bool IsServiceAvailable(uint32_t timeoutMs)
 {
-    libpipe::pipe_client client(R"(\\.\pipe\AutoSudoPipe)");
+    scl2::pipe::client client(R"(\\.\pipe\AutoSudoPipe)");
     return client.waitForConnection(std::chrono::milliseconds(timeoutMs));
 }
 
@@ -147,7 +147,7 @@ bool TryListRules(std::vector<RuleEntry>& outRules)
 }
 
 bool ModifyRule(uint16_t uid, Rule::Type type, Rule::EType etype, Rule::Action action,
-                PermissionLevel allowUpTo, const std::bytearray& payload,
+                PermissionLevel allowUpTo, const scl2::bytearray& payload,
                 std::optional<uint16_t> moveToOrder)
 {
     RuleClient client;
@@ -243,7 +243,7 @@ bool ModifyVoteRule(uint16_t uid, Rule::EType etype, Rule::Action action, Permis
 bool ModifyDigitalSignatureRule(uint16_t uid, Rule::EType etype, Rule::Action action, PermissionLevel allowUpTo,
                                 std::optional<uint16_t> moveToOrder)
 {
-    std::bytearray payload;
+    scl2::bytearray payload;
     return ModifyRule(uid, Rule::Type::DigitalSignatureRule, etype, action, allowUpTo, payload, moveToOrder);
 }
 
@@ -270,7 +270,7 @@ bool ReorderRulesByUidOrder(const std::vector<uint16_t>& orderedUids)
     return true;
 }
 
-std::string ParseRulePayload(Rule::Type type, const std::bytearray& payload)
+std::string ParseRulePayload(Rule::Type type, const scl2::bytearray& payload)
 {
     try {
         switch(type) {

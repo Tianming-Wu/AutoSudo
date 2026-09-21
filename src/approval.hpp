@@ -82,11 +82,11 @@ enum class ApprovalResultId : uint8_t {
 struct ApprovalRequest {
     fs::path executable;
     fs::path startupDirectory;
-    std::wstringlist arguments;
+    scl2::wstringlist arguments;
     PermissionLevel perm; // The permission level requested by this process creation request.
 
-    dword_t session_id; // Session id
-    dword_t user_sid; // User SID
+    uint32_t session_id; // Session id
+    uint32_t user_sid; // User SID
 
     // std::vector<std::wstring> environmentVariables; // Environment variables in the form of "KEY=VALUE"
 
@@ -173,10 +173,10 @@ private:
     bool __digsig_evaluate(const fs::path& path) const; // If the file is digitally signed and the signature is valid. Has no payload.
 
 
-    static ApprovalRule create(Type type, EType etype, Action action, AllowUpTo allowUpTo, const std::bytearray& payload);
+    static ApprovalRule create(Type type, EType etype, Action action, AllowUpTo allowUpTo, const scl2::bytearray& payload);
 
-    static ApprovalRule load(const std::bytearray_view& data);
-    static std::bytearray dump(const ApprovalRule& rule);
+    static ApprovalRule load(const scl2::bytearray& data);
+    static scl2::bytearray dump(const ApprovalRule& rule);
 
 private:
     Type type;
@@ -186,7 +186,7 @@ private:
     apprule_uid_t uid;
     order_t order; // The order of this rule in the evaluation. Lower order means higher priority.
 
-    std::bytearray payload; // The actual rule data, which is interpreted according to the type.
+    scl2::bytearray payload; // The actual rule data, which is interpreted according to the type.
 };
 
 
@@ -208,10 +208,10 @@ public:
     inline void setAutoSave(bool enable) { autosave = enable; }
 
     apprule_uid_t create(ApprovalRule::Type type, ApprovalRule::EType etype, ApprovalRule::Action action,
-                         PermissionLevel allowUpTo, const std::bytearray& payload,
+                         PermissionLevel allowUpTo, const scl2::bytearray& payload,
                          std::optional<order_t> insertAt = std::nullopt);
     bool modify(apprule_uid_t uid, ApprovalRule::Type type, ApprovalRule::EType etype,
-                ApprovalRule::Action action, PermissionLevel allowUpTo, const std::bytearray& payload,
+                ApprovalRule::Action action, PermissionLevel allowUpTo, const scl2::bytearray& payload,
                 std::optional<order_t> moveToOrder = std::nullopt);
     bool remove(apprule_uid_t uid);
 
@@ -246,8 +246,8 @@ private:
     ApprovalResult _evaluate(const ApprovalRequest& request) const;
 
 public:
-    static ApprovalEngine load(const std::bytearray_view& data);
-    static std::bytearray dump(const ApprovalEngine& engine);
+    static ApprovalEngine load(const scl2::bytearray& data);
+    static scl2::bytearray dump(const ApprovalEngine& engine);
 };
 
 

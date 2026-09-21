@@ -11,13 +11,13 @@
 #include <SharedCppLib2/logt.hpp>
 #include <SharedCppLib2/api.hpp>
 
-#include <libpipe.hpp>
+#include <SharedCppLib2/pipe.hpp>
 
 #include "defs.hpp"
 
 struct AutoSudoRequest {
     std::wstring executableFullPath;
-    std::wstringlist arguments;
+    scl2::wstringlist arguments;
     std::wstring workingDirectory;
     std::wstring calledPath;  //客户端调用路径，就是 AutoSudo 命令执行时的当前工作路径
 
@@ -34,8 +34,8 @@ struct AutoSudoRequest {
     // 可选环境变量参数（未完全实装）
     // std::vector<std::wstring> environmentVariables;
 
-    static std::bytearray dump(const AutoSudoRequest& asr);
-    static AutoSudoRequest load(const std::bytearray_view& data);
+    static scl2::bytearray dump(const AutoSudoRequest& asr);
+    static AutoSudoRequest load(const scl2::bytearray& data);
 };
 
 scl2_check_generic_dump_load(AutoSudoRequest);
@@ -54,15 +54,15 @@ struct RuleEngineOperationRequest {
     uint8_t ruleEType = 0;   // Corresponds to ApprovalRule::EType
     uint32_t ruleAction = 0; // Corresponds to ApprovalRule::Action
     PermissionLevel ruleAllowUpTo = PermissionLevel::User;
-    std::bytearray payload;
+    scl2::bytearray payload;
     
     // Positions
     std::optional<uint16_t> insertAt;  // For Create: position to insert at
     std::optional<uint16_t> moveToOrder;  // For Modify/Move: target position
     
     // Serialization
-    std::bytearray dump() const;
-    static RuleEngineOperationRequest load(const std::bytearray_view& data);
+    scl2::bytearray dump() const;
+    static RuleEngineOperationRequest load(const scl2::bytearray& data);
 };
 
 scl2_check_generic_dump_load(RuleEngineOperationRequest);
@@ -74,8 +74,8 @@ struct RuleEngineOperationResult {
     uint16_t createdUid = 0;  // For Create: returns the newly created UID
     
     // Serialization
-    std::bytearray dump() const;
-    static RuleEngineOperationResult load(const std::bytearray_view& data);
+    scl2::bytearray dump() const;
+    static RuleEngineOperationResult load(const scl2::bytearray& data);
 };
 
 scl2_check_generic_dump_load(RuleEngineOperationResult);
@@ -88,10 +88,10 @@ struct RuleEntry {
     uint8_t etype;
     uint32_t action;
     PermissionLevel allowUpTo;
-    std::bytearray payload;
+    scl2::bytearray payload;
     
-    std::bytearray dump() const;
-    static RuleEntry load(const std::bytearray_view& data);
+    scl2::bytearray dump() const;
+    static RuleEntry load(const scl2::bytearray& data);
 };
 
 scl2_check_generic_dump_load(RuleEntry);
@@ -100,8 +100,8 @@ scl2_check_generic_dump_load(RuleEntry);
 struct RuleListResponse {
     std::vector<RuleEntry> rules;
     
-    std::bytearray dump() const;
-    static RuleListResponse load(const std::bytearray_view& data);
+    scl2::bytearray dump() const;
+    static RuleListResponse load(const scl2::bytearray& data);
 };
 
 scl2_check_generic_dump_load(RuleListResponse);

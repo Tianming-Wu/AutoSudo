@@ -49,7 +49,7 @@ void list::load() {
         }
         
         // 解析格式: 文件路径|权限级别|SHA256哈希
-        std::stringlist sl(line, "|");
+        scl2::stringlist sl(line, "|");
         if(sl.size() != 3) {
             logt.warn() << "Invalid authlist format at line " << lineNumber;
             continue;
@@ -134,7 +134,7 @@ void list::insert(const fs::path &path, AuthLevel al) {
         return;
     }
 
-    std::bytearray content;
+    scl2::bytearray content;
     if(content.readAllFromStream(ifs)) {
         ad.sha = scl2::sha256::getMessageDigest(content);
         ifs.close();
@@ -176,7 +176,7 @@ AuthLevel list::test(const fs::path &path, AuthLevel requestedLevel) {
     return AuthLevel::NotFound;
 }
 
-bool list::verifyHash(const fs::path &path, const std::bytearray &expected)
+bool list::verifyHash(const fs::path &path, const scl2::bytearray &expected)
 {
     if(!fs::exists(path)) {
         return false;
@@ -187,12 +187,12 @@ bool list::verifyHash(const fs::path &path, const std::bytearray &expected)
         return false;
     }
     
-    std::bytearray content;
+    scl2::bytearray content;
     if(!content.readAllFromStream(ifs)) {
         return false;
     }
     
-    std::bytearray actualSha = scl2::sha256::getMessageDigest(content);
+    scl2::bytearray actualSha = scl2::sha256::getMessageDigest(content);
     return actualSha == expected;
 }
 

@@ -15,18 +15,18 @@
 PSECURITY_DESCRIPTOR CreatePipeSecurity();
 std::wstring MakeFullCommandLine(const AutoSudoRequest& request);
 
-Broker::Broker(const std::string& pipeName, const std::string &inputStreamName, const std::string &outputStreamName, const std::bytearray& token)
+Broker::Broker(const std::string& pipeName, const std::string &inputStreamName, const std::string &outputStreamName, const scl2::bytearray& token)
     : m_name(pipeName), m_inputStreamName(inputStreamName), m_outputStreamName(outputStreamName), m_token(token)
-    , msgServer(pipeName, libpipe::PermissionPresets::Everyone)
-    , inputStreamServer(inputStreamName, libpipe::PermissionPresets::Everyone)
-    , outputStreamServer(outputStreamName, libpipe::PermissionPresets::Everyone)
+    , msgServer(pipeName, scl2::pipe::permission_preset::Everyone)
+    , inputStreamServer(inputStreamName, scl2::pipe::permission_preset::Everyone)
+    , outputStreamServer(outputStreamName, scl2::pipe::permission_preset::Everyone)
 {
-    msgServer.setPipeMode(libpipe::PipeMode::Message);
+    msgServer.setPipeMode(scl2::pipe::mode::Message);
     // Stream pipes use byte mode (default)
 
-    msgServer.setMaxClients(1);
-    inputStreamServer.setMaxClients(1);
-    outputStreamServer.setMaxClients(1);
+    msgServer.setClientLimit(1);
+    inputStreamServer.setClientLimit(1);
+    outputStreamServer.setClientLimit(1);
 }
 
 Broker::~Broker()
@@ -71,16 +71,16 @@ int Broker::Run()
         };
 
         if(client.waitForReadyRead(std::chrono::milliseconds(500))) {
-            std::bytearray data = client.readAll();
+            scl2::bytearray data = client.readAll();
             AutoSudoRequest request = AutoSudoRequest::load(data);
             logt.debug() << "Received command: " << request.executableFullPath << ", args: " << request.arguments.xjoin();
 
             // notify client to be ready for later streamed connection
-            client.write(std::bytearray(BrokerResponse::Success));
+            client.write(scl2::bytearray::fromTrivialType(BrokerResponse::Success));
 
             // tell the client about the stream pipe names (input and output)
-            client.write(std::bytearray(m_inputStreamName));
-            client.write(std::bytearray(m_outputStreamName));
+            client.write(scl2::bytearray(m_inputStreamName));
+            client.write(scl2::bytearray(m_outputStreamName));
 
             // client must be moved and cannot be copied.
             return RunProcess(std::move(client), request);
@@ -96,7 +96,7 @@ int Broker::Run()
     return 0;
 }
 
-int Broker::RunProcess(libpipe::pipe_server_client&& msgClient, const AutoSudoRequest &request)
+int Broker::RunProcess(scl2::pipe::server_client&& msgClient, const AutoSudoRequest &request)
 {
     LOGT_LOCAL("Broker::RunProcess");
 
@@ -129,7 +129,7 @@ int Broker::RunProcess(libpipe::pipe_server_client&& msgClient, const AutoSudoRe
     
     if (FAILED(hr)) {
         logt.error() << "CreatePseudoConsole failed: " << hr;
-        msgClient.write(std::bytearray(BrokerResponse::ConPTYCreationFailed));
+        msgClient.write(scl2::bytearray::fromTrivialType(BrokerResponse::ConPTYCreationFailed));
 
         CloseHandle(inRead);
         CloseHandle(inWrite);
@@ -169,7 +169,7 @@ int Broker::RunProcess(libpipe::pipe_server_client&& msgClient, const AutoSudoRe
         // 说明用户发送给服务和 Broker 的 SessionId 不一致，拒绝执行。
         logt.error() << "Session ID mismatch: active session is " << WTSGetActiveConsoleSessionId()
                      << " but got " << targetSessionId << " from client. Refusing to run process.";
-        msgClient.write(std::bytearray(BrokerResponse::SessionIDMismatch));
+        msgClient.write(scl2::bytearray::fromTrivialType(BrokerResponse::SessionIDMismatch));
         return ERROR_ACCESS_DENIED;
     }
 
@@ -214,7 +214,7 @@ int Broker::RunProcess(libpipe::pipe_server_client&& msgClient, const AutoSudoRe
 
     if (!success) {
         logt.error() << "CreateProcessW failed: " << platform::windows::TranslateLastError();
-        msgClient.write(std::bytearray(BrokerResponse::ProcessStartFailed));
+        msgClient.write(scl2::bytearray::fromTrivialType(BrokerResponse::ProcessStartFailed));
         ClosePseudoConsole(hPC);
         CloseHandle(inWrite);
         CloseHandle(outRead);
@@ -225,7 +225,7 @@ int Broker::RunProcess(libpipe::pipe_server_client&& msgClient, const AutoSudoRe
 
     // 5) broker 负责 IO 转发
     // 先返回 0x00 告诉客户端进程启动成功。
-    msgClient.write(std::bytearray(BrokerResponse::Success));
+    msgClient.write(scl2::bytearray::fromTrivialType(BrokerResponse::Success));
 
     std::atomic_bool running { true };
 
@@ -234,7 +234,7 @@ int Broker::RunProcess(libpipe::pipe_server_client&& msgClient, const AutoSudoRe
         // Client -> Broker -> ConPTY (阻塞式读取，无轮询延迟)
         logt.debug() << "Input forwarding thread started.";
         while (running) {
-            std::bytearray data = inputClient.read(4096);
+            scl2::bytearray data = inputClient.read(4096);
             if (data.empty()) {
                 if (inputClient.broken()) {
                     logt.debug() << "Input stream pipe closed (input forward thread).";
@@ -242,10 +242,10 @@ int Broker::RunProcess(libpipe::pipe_server_client&& msgClient, const AutoSudoRe
                 break;
             }
             
-            logt.debug() << "Received " << data.rawSize() << " bytes from client, forwarding to ConPTY.";
+            logt.debug() << "Received " << data.size() << " bytes from client, forwarding to ConPTY.";
             DWORD written;
-            const void* dataPtr = data.rawData();
-            const DWORD dataSize = static_cast<DWORD>(data.rawSize());
+            const void* dataPtr = data.data();
+            const DWORD dataSize = static_cast<DWORD>(data.size());
             
             if (!WriteFile(inWrite, dataPtr, dataSize, &written, nullptr)) {
                 DWORD err = GetLastError();
@@ -267,7 +267,7 @@ int Broker::RunProcess(libpipe::pipe_server_client&& msgClient, const AutoSudoRe
         while (running) {
             if (ReadFile(outRead, buffer, sizeof(buffer), &read, nullptr) && read > 0) {
                 logt.debug() << "Read " << read << " bytes from ConPTY, forwarding to client.";
-                if (outputClient.write(std::bytearray(buffer, read)) == 0) {
+                if (outputClient.write(scl2::bytearray(buffer, read)) == 0) {
                     logt.warn() << "Write to output stream pipe failed.";
                     // 写入失败时检查连接是否断开
                     if (outputClient.broken()) {
@@ -294,18 +294,17 @@ int Broker::RunProcess(libpipe::pipe_server_client&& msgClient, const AutoSudoRe
         logt.debug() << "Control message thread started.";
         while(running && externalExitFlag) {
             if(msgClient.waitForReadyRead(std::chrono::seconds(1))) {
-                std::bytearray Signal = msgClient.readAll();
+                scl2::bytearray Signal = msgClient.readAll();
                 if (Signal.empty()) {
                     // 管道已关闭或断开
                     logt.debug() << "Control message pipe closed.";
                     break;
                 }
-                std::bytearray_view Signal_View(Signal);
-                BrokerSignal signal = Signal_View.read<BrokerSignal>();
+                BrokerSignal signal = Signal.read<BrokerSignal>();
 
                 switch(signal) {
                 case BrokerSignal::ResizeConsole: {
-                    ResizeConsoleData data = Signal_View.read<ResizeConsoleData>();
+                    ResizeConsoleData data = Signal.read<ResizeConsoleData>();
                     ResizePseudoConsole(hPC, COORD{ data.width, data.height });
                     break;
                 }
@@ -344,7 +343,7 @@ int Broker::RunProcess(libpipe::pipe_server_client&& msgClient, const AutoSudoRe
     externalExitFlag = false;
 
     // 往客户端返回进程退出状态码
-    msgClient.write(std::bytearray(exitCode)); // will match _Any constructors, so is fine
+    msgClient.write(scl2::bytearray::fromTrivialType(exitCode));
 
     // 关闭 ConPTY 管道句柄以解除 IO 线程的阻塞
     CloseHandle(inWrite);  inWrite = nullptr;
@@ -401,7 +400,7 @@ PSECURITY_DESCRIPTOR CreatePipeSecurity() {
 }
 
 std::wstring MakeFullCommandLine(const AutoSudoRequest& request) {
-    std::wstringlist args = request.arguments;
+    scl2::wstringlist args = request.arguments;
     args.insert(args.begin(), request.executableFullPath);
     return args.xjoin();
 }

@@ -26,13 +26,13 @@ public:
     // Returns the UID of the created rule, or 0 on failure
     uint16_t createRule(AutoSudoSdk::Rule::Type type, AutoSudoSdk::Rule::EType etype, AutoSudoSdk::Rule::Action action,
                         PermissionLevel allowUpTo,
-                        const std::bytearray& payload, std::optional<uint16_t> insertAt = std::nullopt);
+                        const scl2::bytearray& payload, std::optional<uint16_t> insertAt = std::nullopt);
     
     // Modify an existing rule
     // Returns true on success
     bool modifyRule(uint16_t uid, AutoSudoSdk::Rule::Type type, AutoSudoSdk::Rule::EType etype, AutoSudoSdk::Rule::Action action,
                     PermissionLevel allowUpTo,
-                    const std::bytearray& payload, std::optional<uint16_t> moveToOrder = std::nullopt);
+                    const scl2::bytearray& payload, std::optional<uint16_t> moveToOrder = std::nullopt);
     
     // Delete a rule
     // Returns true on success

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <SharedCppLib2/platform.hpp>
+
 #include "protocol.hpp"
 #include "rule_client.hpp"
 
@@ -84,7 +86,7 @@ bool IsServiceAvailable(uint32_t timeoutMs = 1000);
 bool TryListRules(std::vector<RuleEntry>& outRules);
 
 bool ModifyRule(uint16_t uid, Rule::Type type, Rule::EType etype, Rule::Action action,
-                PermissionLevel allowUpTo, const std::bytearray& payload,
+                PermissionLevel allowUpTo, const scl2::bytearray& payload,
                 std::optional<uint16_t> moveToOrder = std::nullopt);
 bool ModifyConstantRule(uint16_t uid, Rule::EType etype, Rule::Action action, PermissionLevel allowUpTo,
                         std::optional<uint16_t> moveToOrder = std::nullopt);
@@ -123,7 +125,7 @@ std::vector<std::pair<std::string, Rule::EType>> getAvailableETypes(Rule::Type t
 
 
 // Read helper functions to translate payload into human-readable format.
-std::string ParseRulePayload(Rule::Type type, const std::bytearray& payload);
+std::string ParseRulePayload(Rule::Type type, const scl2::bytearray& payload);
 std::string ParseRulePayload(const RuleEntry& rule);
 
 // Update helper functions

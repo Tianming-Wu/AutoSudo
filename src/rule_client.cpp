@@ -1,6 +1,6 @@
 #include "rule_client.hpp"
 
-#include <libpipe.hpp>
+#include <SharedCppLib2/pipe.hpp>
 #include <SharedCppLib2/logt.hpp>
 #include <chrono>
 
@@ -16,7 +16,7 @@ bool RuleClient::connect() {
 
 uint16_t RuleClient::createRule(AutoSudoSdk::Rule::Type type, AutoSudoSdk::Rule::EType etype, AutoSudoSdk::Rule::Action action,
                                  PermissionLevel allowUpTo,
-                                 const std::bytearray& payload, std::optional<uint16_t> insertAt) {
+                                 const scl2::bytearray& payload, std::optional<uint16_t> insertAt) {
     LOGT_LOCAL("RuleClient::createRule");
     
     RuleEngineOperationRequest op;
@@ -38,7 +38,7 @@ uint16_t RuleClient::createRule(AutoSudoSdk::Rule::Type type, AutoSudoSdk::Rule:
 
 bool RuleClient::modifyRule(uint16_t uid, AutoSudoSdk::Rule::Type type, AutoSudoSdk::Rule::EType etype, AutoSudoSdk::Rule::Action action,
                             PermissionLevel allowUpTo,
-                            const std::bytearray& payload, std::optional<uint16_t> moveToOrder) {
+                            const scl2::bytearray& payload, std::optional<uint16_t> moveToOrder) {
     LOGT_LOCAL("RuleClient::modifyRule");
     
     RuleEngineOperationRequest op;
@@ -111,14 +111,14 @@ bool RuleClient::listRules(std::vector<RuleEntry>& outRules) {
 bool RuleClient::sendOperation(const RuleEngineOperationRequest& opreq, RuleEngineOperationResult& result) {
     LOGT_LOCAL("RuleClient::sendOperation<RuleOpResult>");
     
-    libpipe::pipe_client client(pipeName);
+    scl2::pipe::client client(pipeName);
     
     if (!client.waitForConnection(std::chrono::seconds(1))) {
         logt.error() << "Failed to connect to AutoSudo service.";
         return false;
     }
     
-    if (client.write(std::bytearray(ClientRequestType::RuleEngineCommand) + opreq.dump()) == 0) {
+    if (client.write(scl2::bytearray::fromTrivialType(ClientRequestType::RuleEngineCommand) + opreq.dump()) == 0) {
         logt.error() << "Failed to send rule operation to service.";
         return false;
     }
@@ -129,17 +129,14 @@ bool RuleClient::sendOperation(const RuleEngineOperationRequest& opreq, RuleEngi
         return false;
     }
     
-    std::bytearray responseData = client.readAll();
+    scl2::bytearray responseData = client.readAll();
     if (responseData.empty()) {
         logt.error() << "Empty response from service.";
         return false;
     }
 
-    client.acknowledge();
-    
     try {
-        std::bytearray_view view(responseData);
-        result = RuleEngineOperationResult::load(view);
+        result = RuleEngineOperationResult::load(responseData);
         return true;
     } catch (const std::exception& e) {
         logt.error() << "Failed to parse rule operation response: " << e.what();
@@ -150,7 +147,7 @@ bool RuleClient::sendOperation(const RuleEngineOperationRequest& opreq, RuleEngi
 bool RuleClient::sendOperation(const RuleEngineOperationRequest& opreq, RuleListResponse& response) {
     LOGT_LOCAL("RuleClient::sendOperation<RuleListResponse>");
     
-    libpipe::pipe_client client(pipeName);
+    scl2::pipe::client client(pipeName);
     
     if (!client.waitForConnection(std::chrono::seconds(1))) {
         logt.error() << "Failed to connect to AutoSudo service.";
@@ -158,7 +155,7 @@ bool RuleClient::sendOperation(const RuleEngineOperationRequest& opreq, RuleList
     }
     
     // Send request type + operation data
-    std::bytearray requestData;
+    scl2::bytearray requestData;
     requestData.append(ClientRequestType::RuleEngineCommand);
     requestData.append(opreq.dump());
     
@@ -173,17 +170,14 @@ bool RuleClient::sendOperation(const RuleEngineOperationRequest& opreq, RuleList
         return false;
     }
     
-    std::bytearray responseData = client.readAll();
+    scl2::bytearray responseData = client.readAll();
     if (responseData.empty()) {
         logt.error() << "Empty response from service.";
         return false;
     }
 
-    client.acknowledge();
-    
     try {
-        std::bytearray_view view(responseData);
-        response = RuleListResponse::load(view);
+        response = RuleListResponse::load(responseData);
         logt.info() << "Parsed rule list response, count=" << response.rules.size();
         return true;
     } catch (const std::exception& e) {

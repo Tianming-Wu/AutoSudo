@@ -131,10 +131,10 @@ bool ApprovalRule::__hash_fs_evaluate(const fs::path &path) const
     std::ifstream ifs(path, std::ios::binary);
     if(!ifs.is_open()) return false;
 
-    std::bytearray content;
+    scl2::bytearray content;
     if(!content.readAllFromStream(ifs)) return false;
     
-    std::bytearray actualSha = scl2::sha256::hash(content);
+    scl2::bytearray actualSha = scl2::sha256::hash(content);
     return actualSha == payload;
 }
 
@@ -255,7 +255,7 @@ bool ApprovalRule::__digsig_evaluate(const fs::path &path) const
 //     }
 // }
 
-ApprovalRule ApprovalRule::create(Type type, EType etype, Action action, AllowUpTo allowUpTo, const std::bytearray &payload)
+ApprovalRule ApprovalRule::create(Type type, EType etype, Action action, AllowUpTo allowUpTo, const scl2::bytearray &payload)
 {
     ApprovalRule rule;
 
@@ -271,7 +271,7 @@ ApprovalRule ApprovalRule::create(Type type, EType etype, Action action, AllowUp
     return rule;
 }
 
-ApprovalRule ApprovalRule::load(const std::bytearray_view &data)
+ApprovalRule ApprovalRule::load(const scl2::bytearray &data)
 {
     LOGT_LOCAL("ApprovalRule::load");
     ApprovalRule rule;
@@ -292,10 +292,10 @@ ApprovalRule ApprovalRule::load(const std::bytearray_view &data)
     return rule;
 }
 
-std::bytearray ApprovalRule::dump(const ApprovalRule &rule)
+scl2::bytearray ApprovalRule::dump(const ApprovalRule &rule)
 {
     LOGT_LOCAL("ApprovalRule::dump");
-    std::bytearray data;
+    scl2::bytearray data;
 
     data.append(rule.type);
     data.append(rule.etype);
@@ -306,7 +306,7 @@ std::bytearray ApprovalRule::dump(const ApprovalRule &rule)
 
     // We haven't add the nested bytearray handling, so we need to
     // manually append the size and content of the payload.
-    data.appendSize(rule.payload.size());
+    data.append<size_t>(rule.payload.size());
     data.append(rule.payload);
 
     return data;
@@ -412,7 +412,7 @@ bool ApprovalEngine::loadFile()
         return true;
     }
 
-    std::bytearray data;
+    scl2::bytearray data;
     if(!data.readAllFromStream(ifs)) {
         logt.error() << "Failed to read approval rules file: " << filePath;
         return false;
@@ -424,7 +424,7 @@ bool ApprovalEngine::loadFile()
         return true;
     }
 
-    ApprovalEngine loaded = ApprovalEngine::load(std::bytearray_view(data)); // Actual load logic
+    ApprovalEngine loaded = ApprovalEngine::load(data); // Actual load logic
     rules = std::move(loaded.rules);
 
     return true;
@@ -435,7 +435,7 @@ bool ApprovalEngine::save() const
     LOGT_LOCAL("ApprovalEngine::save");
 
     const fs::path filePath = platform::executable_dir() / "rules.db";
-    const fs::path bakPath = filePath.string() + ".bak";
+    const fs::path bakPath = filePath.wstring() + L".bak";
 
     if(rules.empty()) {
         // No rules, remove the file.
@@ -457,7 +457,7 @@ bool ApprovalEngine::save() const
         return true;   
     }
 
-    const fs::path tempPath = filePath.string() + ".tmp";
+    const fs::path tempPath = filePath.wstring() + L".tmp";
 
     std::ofstream ofs(tempPath, std::ios::binary | std::ios::trunc);
     if(!ofs.is_open() || ofs.bad()) {
@@ -465,7 +465,7 @@ bool ApprovalEngine::save() const
         return false;
     }
 
-    std::bytearray data = ApprovalEngine::dump(*this);
+    scl2::bytearray data = ApprovalEngine::dump(*this);
     data.writeRaw(ofs);
 
     ofs.flush();
@@ -613,7 +613,7 @@ ApprovalResult ApprovalEngine::_evaluate(const ApprovalRequest& request) const
 }
 
 apprule_uid_t ApprovalEngine::create(ApprovalRule::Type type, ApprovalRule::EType etype,
-                            ApprovalRule::Action action, PermissionLevel allowUpTo, const std::bytearray &payload,
+                            ApprovalRule::Action action, PermissionLevel allowUpTo, const scl2::bytearray &payload,
                             std::optional<order_t> insertAt)
 {
     LOGT_LOCAL("ApprovalEngine::create");
@@ -676,7 +676,7 @@ apprule_uid_t ApprovalEngine::create(ApprovalRule::Type type, ApprovalRule::ETyp
 }
 
 bool ApprovalEngine::modify(apprule_uid_t uid, ApprovalRule::Type type, ApprovalRule::EType etype,
-                            ApprovalRule::Action action, PermissionLevel allowUpTo, const std::bytearray &payload,
+                            ApprovalRule::Action action, PermissionLevel allowUpTo, const scl2::bytearray &payload,
                             std::optional<order_t> moveToOrder)
 {
     LOGT_LOCAL("ApprovalEngine::modify");
@@ -806,7 +806,7 @@ std::vector<RuleEntry> ApprovalEngine::listRules() const
     return output;
 }
 
-ApprovalEngine ApprovalEngine::load(const std::bytearray_view &data)
+ApprovalEngine ApprovalEngine::load(const scl2::bytearray &data)
 {
     LOGT_LOCAL("ApprovalEngine::load");
     ApprovalEngine engine(false, false);
@@ -832,15 +832,15 @@ ApprovalEngine ApprovalEngine::load(const std::bytearray_view &data)
     return engine;
 }
 
-std::bytearray ApprovalEngine::dump(const ApprovalEngine &engine)
+scl2::bytearray ApprovalEngine::dump(const ApprovalEngine &engine)
 {
     LOGT_LOCAL("ApprovalEngine::dump");
-    std::bytearray data;
+    scl2::bytearray data;
 
     // Here is the engine header (currently empty)
 
 
-    data.appendSize(engine.rules.size());
+    data.append<size_t>(engine.rules.size());
 
     for(const auto &[order, rule] : engine.rules)
         {

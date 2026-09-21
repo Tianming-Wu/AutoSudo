@@ -25,7 +25,7 @@
 std::string generateStreamPipeName();
 
 int main(int argc, char** argv) {
-    std::stringlist args(argc, argv);
+    scl2::stringlist args(argc, argv);
     args.erase(args.begin()); // Remove the program name
 
     if(args.empty()) return 0; // This program is not meant to be executed by the user. 
@@ -45,7 +45,7 @@ int main(int argc, char** argv) {
     std::string inputStreamName = generateStreamPipeName();
     std::string outputStreamName = generateStreamPipeName();
     
-    Broker broker(args[0], inputStreamName, outputStreamName, std::bytearray::fromHex(args[1]));
+    Broker broker(args[0], inputStreamName, outputStreamName, scl2::bytearray::fromHex(args[1]));
 
     auto result = broker.Run();
     

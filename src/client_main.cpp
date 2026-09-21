@@ -7,7 +7,7 @@
 
 #include <wtsapi32.h>
 
-#include <libpipe.hpp>
+#include <SharedCppLib2/pipe.hpp>
 
 #include "protocol.hpp"
 // #include "pipeclient.hpp"
@@ -100,7 +100,7 @@ int ExecuteCommand(const std::wstring& commandLine, PermissionLevel permLevel = 
     // 构建进程上下文
     AutoSudoRequest request;
 
-    std::wstringlist args = std::wstringlist::xsplit(commandLine, L" ", L"\"'");
+    scl2::wstringlist args = scl2::wstringlist::xsplit(commandLine, L" ", L"\"'");
 
     if (args.empty()) { return 1; }
 
@@ -177,7 +177,7 @@ int ExecuteCommand(const std::wstring& commandLine, PermissionLevel permLevel = 
     logt.debug() << "Local request paths: workingDirectory='" << request.workingDirectory
                  << "', calledPath='" << request.calledPath << "'";
 
-    libpipe::pipe_client client(R"(\\.\pipe\AutoSudoPipe)");
+    scl2::pipe::client client(R"(\\.\pipe\AutoSudoPipe)");
 
     if(!client.waitForConnection(std::chrono::seconds(1))) {
         logt.error() << "Failed to connect to AutoSudo service.";
@@ -196,9 +196,9 @@ int ExecuteCommand(const std::wstring& commandLine, PermissionLevel permLevel = 
 
     logt.debug() << "Connected to AutoSudo service.";
 
-    std::bytearray requestPayload = AutoSudoRequest::dump(request);
+    scl2::bytearray requestPayload = AutoSudoRequest::dump(request);
     
-    std::bytearray outbound;
+    scl2::bytearray outbound;
     outbound.append(ClientRequestType::ExecuteCommand);
     outbound.append(requestPayload);
 
@@ -227,13 +227,11 @@ int ExecuteCommand(const std::wstring& commandLine, PermissionLevel permLevel = 
         return 1;
     }
 
-    std::bytearray firstPacket = client.readAll();
+    scl2::bytearray firstPacket = client.readAll();
     if(firstPacket.empty()) {
         logt.error() << "Empty response from service.";
         return 1;
     }
-
-    client.acknowledge(); // 确认已接收到服务端响应，防止过早断开
 
     std::wstring firstPacketW = firstPacket.toStdWString();
     if(firstPacketW.starts_with(L"SUCCESS:") || firstPacketW.starts_with(L"ERROR:")) {
@@ -258,10 +256,7 @@ int ExecuteCommand(const std::wstring& commandLine, PermissionLevel permLevel = 
         return 1;
     }
 
-    // 确认已接收到 broker 信息，防止服务端过早关闭
-    client.acknowledge();
-
-    libpipe::pipe_client brokerMsgClient(brokerMsgPipe);
+    scl2::pipe::client brokerMsgClient(brokerMsgPipe);
     if(!brokerMsgClient.waitForConnection(std::chrono::seconds(5))) {
         logt.error() << "Failed to connect to broker message pipe: " << brokerMsgPipe;
         return 1;
@@ -279,7 +274,7 @@ int ExecuteCommand(const std::wstring& commandLine, PermissionLevel permLevel = 
         return 1;
     }
 
-    BrokerResponse br = brokerMsgClient.readAll().convert_to<BrokerResponse>();
+    BrokerResponse br = brokerMsgClient.readAll().to<BrokerResponse>();
     if(br != BrokerResponse::Success) {
         logt.error() << "Broker rejected context, response code: " << static_cast<uint32_t>(br);
         return 1;
@@ -310,14 +305,14 @@ int ExecuteCommand(const std::wstring& commandLine, PermissionLevel permLevel = 
     }
 
     // 连接到输入管道（客户端写入，broker 读取）
-    libpipe::pipe_client inputClient(inputPipeName);
+    scl2::pipe::client inputClient(inputPipeName);
     if(!inputClient.waitForConnection(std::chrono::seconds(5))) {
         logt.error() << "Failed to connect to broker input stream pipe: " << inputPipeName;
         return 1;
     }
 
     // 连接到输出管道（broker 写入，客户端读取）
-    libpipe::pipe_client outputClient(outputPipeName);
+    scl2::pipe::client outputClient(outputPipeName);
     if(!outputClient.waitForConnection(std::chrono::seconds(5))) {
         logt.error() << "Failed to connect to broker output stream pipe: " << outputPipeName;
         return 1;
@@ -328,7 +323,7 @@ int ExecuteCommand(const std::wstring& commandLine, PermissionLevel permLevel = 
         return 1;
     }
 
-    BrokerResponse startResponse = brokerMsgClient.readAll().convert_to<BrokerResponse>();
+    BrokerResponse startResponse = brokerMsgClient.readAll().to<BrokerResponse>();
     if(startResponse != BrokerResponse::Success) {
         logt.error() << "Process start failed in broker, response code: " << static_cast<uint32_t>(startResponse);
         return 1;
@@ -382,7 +377,7 @@ int ExecuteCommand(const std::wstring& commandLine, PermissionLevel permLevel = 
             if (ReadFile(hIn, inputBuffer.data(), DWORD(inputBuffer.size()), &bytesRead, nullptr)) {
                 if (bytesRead > 0) {
                     logt.debug() << "Read " << bytesRead << " bytes from stdin.";
-                    if (inputClient.write(std::bytearray(inputBuffer.data(), bytesRead)) == 0) {
+                    if (inputClient.write(scl2::bytearray(inputBuffer.data(), bytesRead)) == 0) {
                         logt.warn() << "Write to broker input stream failed.";
                         // 写入失败时检查连接是否断开
                         if (inputClient.broken()) {
@@ -408,7 +403,7 @@ int ExecuteCommand(const std::wstring& commandLine, PermissionLevel permLevel = 
         logt.debug() << "Output thread started.";
         while (running) {
             // 阻塞式读取，数据一到就返回，无轮询延迟
-            std::bytearray output = outputClient.read(4096);
+            scl2::bytearray output = outputClient.read(4096);
             if(output.empty()) {
                 if (outputClient.broken()) {
                     logt.debug() << "Output stream pipe closed (output thread).";
@@ -416,10 +411,10 @@ int ExecuteCommand(const std::wstring& commandLine, PermissionLevel permLevel = 
                 break;
             }
 
-            logt.debug() << "Received " << output.rawSize() << " bytes from broker, writing to stdout.";
+            logt.debug() << "Received " << output.size() << " bytes from broker, writing to stdout.";
             DWORD bytesWritten = 0;
-            const void* dataPtr = output.rawData();
-            const DWORD dataSize = static_cast<DWORD>(output.rawSize());
+            const void* dataPtr = output.data();
+            const DWORD dataSize = static_cast<DWORD>(output.size());
             
             if (!WriteFile(hOut, dataPtr, dataSize, &bytesWritten, nullptr)) {
                 DWORD err = GetLastError();
@@ -436,7 +431,7 @@ int ExecuteCommand(const std::wstring& commandLine, PermissionLevel permLevel = 
         logt.debug() << "Control thread started.";
         while (running) {
             // 阻塞式读取控制消息
-            std::bytearray msg = brokerMsgClient.readAll();
+            scl2::bytearray msg = brokerMsgClient.readAll();
             if(msg.empty()) {
                 if (brokerMsgClient.broken()) {
                     logt.debug() << "Broker message pipe closed (control thread).";
@@ -444,9 +439,9 @@ int ExecuteCommand(const std::wstring& commandLine, PermissionLevel permLevel = 
                 break;
             }
 
-            logt.debug() << "Received control message of size " << msg.rawSize();
-            if(msg.rawSize() == sizeof(uint32_t)) {
-                processExitCode = static_cast<int>(msg.convert_to<uint32_t>());
+            logt.debug() << "Received control message of size " << msg.size();
+            if(msg.size() == sizeof(uint32_t)) {
+                processExitCode = static_cast<int>(msg.to<uint32_t>());
                 logt.debug() << "Received process exit code: " << processExitCode.load();
                 break;
             }
@@ -486,7 +481,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
 // 命令行版本使用 wmain  
 int wmain(int argc, wchar_t** argv) {
 #endif
-    std::warguments args(argc, argv);
+    scl2::warguments args(argc, argv);
 
 
     // 初始化日志
