@@ -227,6 +227,12 @@ private:
     bool autosave; // Trigger save() after every modification, to avoid data loss. Can be turned off for batch modifications.
     bool manageSingleInstanceLifecycle;
 
+    // Header content (standalone rules)
+    
+    // Default operation for requests that do not match any rule.
+    ApprovalRule::Action defaultAction = ApprovalRule::Action::RequestConfirmation;
+
+
 private:
     ApprovalEngine(bool autosave, bool manageSingleInstanceLifecycle);
 

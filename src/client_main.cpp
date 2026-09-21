@@ -113,12 +113,29 @@ int ExecuteCommand(const std::wstring& commandLine, PermissionLevel permLevel = 
     request.executableFullPath = resolvedPath;
     request.arguments = args.subarr(1);
 
-    // 获取当前工作目录
-    wchar_t currentDir[MAX_PATH];
-    GetCurrentDirectory(MAX_PATH, currentDir);
-    request.workingDirectory = currentDir;
-
-    request.calledPath = currentDir;
+    // 获取当前工作目录；失败时回退到目标程序所在目录。
+    wchar_t currentDir[MAX_PATH] = {0};
+    DWORD cwdLen = GetCurrentDirectoryW(MAX_PATH, currentDir);
+    if (cwdLen > 0 && cwdLen < MAX_PATH) {
+        fs::path cwdPath(currentDir);
+        std::error_code cwdEc;
+        if (fs::exists(cwdPath, cwdEc) && fs::is_directory(cwdPath, cwdEc)) {
+            request.workingDirectory = currentDir;
+            request.calledPath = currentDir;
+        } else {
+            fs::path fallbackDir = fs::path(resolvedPath).parent_path();
+            request.workingDirectory = fallbackDir.wstring();
+            request.calledPath = fallbackDir.wstring();
+            logt.warn() << "GetCurrentDirectory returned invalid directory (cwdLen=" << cwdLen
+                        << "): " << currentDir << ", fallback to executable directory: " << fallbackDir.wstring();
+        }
+    } else {
+        fs::path fallbackDir = fs::path(resolvedPath).parent_path();
+        request.workingDirectory = fallbackDir.wstring();
+        request.calledPath = fallbackDir.wstring();
+        logt.warn() << "GetCurrentDirectory failed (cwdLen=" << cwdLen
+                    << "), fallback to executable directory: " << fallbackDir.wstring();
+    }
 
     // 设置认证级别和删除标志
     request.requestedPermissionLevel = permLevel;
@@ -157,6 +174,9 @@ int ExecuteCommand(const std::wstring& commandLine, PermissionLevel permLevel = 
         logt.warn() << "Failed to get active session ID.";
     }
 
+    logt.debug() << "Local request paths: workingDirectory='" << request.workingDirectory
+                 << "', calledPath='" << request.calledPath << "'";
+
     libpipe::pipe_client client(R"(\\.\pipe\AutoSudoPipe)");
 
     if(!client.waitForConnection(std::chrono::seconds(1))) {
@@ -169,13 +189,20 @@ int ExecuteCommand(const std::wstring& commandLine, PermissionLevel permLevel = 
                   MB_OK | MB_ICONERROR);
         #endif
 
+        // Fallback to traditional UAC method if service connection fails, to avoid silent failure.
         logt.info() << "Falling back to traditional UAC method.";
         return StartupFallback(commandLine, permLevel);
     }
 
     logt.debug() << "Connected to AutoSudo service.";
 
-    if (client.write(std::bytearray(ClientRequestType::ExecuteCommand) + AutoSudoRequest::dump(request)) == 0) {
+    std::bytearray requestPayload = AutoSudoRequest::dump(request);
+    
+    std::bytearray outbound;
+    outbound.append(ClientRequestType::ExecuteCommand);
+    outbound.append(requestPayload);
+
+    if (client.write(outbound) == 0) {
         logt.error() << "Failed to send command to AutoSudo service.";
         #ifdef AUTOSUDO_GUI
         MessageBox(nullptr,
@@ -183,9 +210,14 @@ int ExecuteCommand(const std::wstring& commandLine, PermissionLevel permLevel = 
                 L"AutoSudo 连接错误",
                 MB_OK | MB_ICONERROR);
         #endif
-        return 1;
+
+        // Fallback to traditional UAC method if service write failes, to avoid silent failure.
+        logt.info() << "Falling back to traditional UAC method.";
+        return StartupFallback(commandLine, permLevel);
     }
 
+    // Wait for up to 30 seconds, since the service might ask for
+    // user confirmation, which can take a while (10 secs by default)
     if(!client.waitForReadyRead(std::chrono::seconds(30))) {
         if(client.broken()) {
             logt.error() << "Connection to service was broken.";

@@ -215,6 +215,8 @@ bool ApprovalRule::__filetime_evaluate(const fs::path& path) const
 bool ApprovalRule::__digsig_evaluate(const fs::path &path) const
 {
     // In this case payload does nothing.
+
+    ///TODO: Later we might want to specific which signature is used.
     return authlib::VerifyDigitalSignature(path);
 }
 
@@ -554,8 +556,9 @@ ApprovalResult ApprovalEngine::_evaluate(const ApprovalRequest& request) const
             // Do nothing, just ignore this rule.
             break;
         default:
-            logt.error() << "Invalid action in rule uid " << rule.uid << ": " << static_cast<int>(rule.action);
-            throw std::logic_error("Invalid action in rule"); // fail the top-level evaluation.
+            logt.warn() << "Invalid action in rule uid " << rule.uid << ": " << static_cast<int>(rule.action);
+            // throw std::logic_error("Invalid action in rule"); // fail the top-level evaluation.
+            break; // Ignore invalid action, treat it as Bypass.
         }
     };
 

@@ -6,5 +6,8 @@ void registerToast()
 {
 }
 
+void pushToast(const std::wstring &title, const std::wstring &message)
+{
+}
 
 } // namespace toast

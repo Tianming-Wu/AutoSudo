@@ -291,11 +291,11 @@ std::string ParseRulePayload(Rule::Type type, const std::bytearray& payload)
         case Rule::Type::HashRule:
             return payload.toHex();
         case Rule::Type::DigitalSignatureRule:
-            return "<no payload>";
+            return "";
         case Rule::Type::Constant:
-            return payload.empty() ? "<no payload>" : payload.toHex();
+            return payload.empty() ? "" : payload.toHex();
         default:
-            return payload.empty() ? "<no payload>" : payload.toHex();
+            return payload.empty() ? "" : payload.toHex();
         }
     } catch (const std::exception& e) {
         return std::string("<payload parse error: ") + e.what() + ">";

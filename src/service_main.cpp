@@ -234,6 +234,24 @@ bool CreateProcessInUserSession(const AutoSudoRequest& request, std::string* bro
         }
     }
 
+    std::wstring workingDirectoryForCreate = request.workingDirectory;
+    if (!workingDirectoryForCreate.empty()) {
+        std::error_code wdEc;
+        fs::path wdPath(workingDirectoryForCreate);
+        if (!fs::exists(wdPath, wdEc) || !fs::is_directory(wdPath, wdEc)) {
+            fs::path fallbackDir = fs::path(request.executableFullPath).parent_path();
+            if (!fallbackDir.empty() && fs::exists(fallbackDir, wdEc) && fs::is_directory(fallbackDir, wdEc)) {
+                logt.warn() << "Invalid request working directory: " << workingDirectoryForCreate
+                            << ", fallback to executable directory: " << fallbackDir.wstring();
+                workingDirectoryForCreate = fallbackDir.wstring();
+            } else {
+                logt.warn() << "Invalid request working directory and executable directory unavailable: " << workingDirectoryForCreate
+                            << ", CreateProcessAsUser will use default directory.";
+                workingDirectoryForCreate.clear();
+            }
+        }
+    }
+
     // 如果设置了 deleteAuth 标志，询问用户是否删除授权
     // 26.03.22: 这套判断逻辑已经不适用于新的规则系统，将于未来版本完全移除
     // if (request.deleteAuth) {
@@ -397,7 +415,7 @@ bool CreateProcessInUserSession(const AutoSudoRequest& request, std::string* bro
         FALSE,
         CREATE_UNICODE_ENVIRONMENT,
         envBlock,
-        request.workingDirectory.empty() ? nullptr : request.workingDirectory.c_str(),
+        workingDirectoryForCreate.empty() ? nullptr : workingDirectoryForCreate.c_str(),
         &si,
         &pi
     );
@@ -418,7 +436,7 @@ bool CreateProcessInUserSession(const AutoSudoRequest& request, std::string* bro
                 FALSE,
                 CREATE_NEW_CONSOLE,
                 nullptr,
-                request.workingDirectory.empty() ? nullptr : request.workingDirectory.c_str(),
+                workingDirectoryForCreate.empty() ? nullptr : workingDirectoryForCreate.c_str(),
                 &si,
                 &pi
             );
@@ -460,6 +478,8 @@ bool HandleExecutionRequest(libpipe::pipe_server_client& client, const std::byte
     // Handle program execution request
     AutoSudoRequest request = AutoSudoRequest::load(data);
     logt.info() << "Received command: " << request.executableFullPath << ", args: " << request.arguments.xjoin();
+    logt.debug() << "Request paths: workingDirectory='" << request.workingDirectory
+                 << "', calledPath='" << request.calledPath << "'";
     
     // 根据上下文决定创建方式
     bool success = false;
@@ -491,6 +511,9 @@ bool HandleExecutionRequest(libpipe::pipe_server_client& client, const std::byte
         }
     } else {
         client.write(std::bytearray::fromStdWString(L"ERROR: Failed to create process"));
+        if(!client.waitForAcknowledged(std::chrono::seconds(1))) {
+            logt.warn() << "Client did not acknowledge execution error response.";
+        }
     }
     
     return true;

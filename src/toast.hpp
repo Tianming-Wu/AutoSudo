@@ -10,6 +10,8 @@
 
 #pragma once
 
+#include <string>
+
 namespace toast {
 
 
@@ -17,6 +19,7 @@ namespace toast {
 // show toasts. This function registers the AUMID for AutoSudo.
 void registerToast();
 
+void pushToast(const std::wstring& title, const std::wstring& message);
 
 
 } // namespace toast

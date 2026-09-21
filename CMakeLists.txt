@@ -12,6 +12,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
 
 add_definitions("-DUNICODE" "-D_UNICODE")
 
+# add a d postfix in name to prevent colliding
+set(CMAKE_DEBUG_POSTFIX "d")
+
 # Set source and execution character sets to UTF-8 for MSVC
 add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/source-charset:utf-8>")
 add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/execution-charset:utf-8>")
