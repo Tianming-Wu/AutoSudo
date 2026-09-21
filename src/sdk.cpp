@@ -260,6 +260,12 @@ bool MoveRule(uint16_t uid, uint16_t targetOrder)
     return client.moveRule(uid, targetOrder);
 }
 
+bool DeleteRule(uint16_t uid)
+{
+    RuleClient client;
+    return client.deleteRule(uid);
+}
+
 bool ReorderRulesByUidOrder(const std::vector<uint16_t>& orderedUids)
 {
     RuleClient client;

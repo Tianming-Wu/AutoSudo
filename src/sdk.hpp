@@ -117,6 +117,7 @@ bool ModifyDigitalSignatureRule(uint16_t uid, Rule::EType etype, Rule::Action ac
 
 std::vector<RuleEntry> ListRules();
 bool MoveRule(uint16_t uid, uint16_t targetOrder);
+bool DeleteRule(uint16_t uid);
 bool ReorderRulesByUidOrder(const std::vector<uint16_t>& orderedUids);
 
 
