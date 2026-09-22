@@ -36,6 +36,11 @@ struct AutoSudoRequest {
 
     static scl2::bytearray dump(const AutoSudoRequest& asr);
     static AutoSudoRequest load(const scl2::bytearray& data);
+
+    /// Whether this request is something the service is willing to act on. A request off the
+    /// wire is untrusted input: the fields are checked against the known sets and the limits
+    /// in defs.hpp, and a bad one is refused, never repaired. `reason` says why.
+    bool validate(std::string& reason) const;
 };
 
 scl2_check_generic_dump_load(AutoSudoRequest);
@@ -63,6 +68,11 @@ struct RuleEngineOperationRequest {
     // Serialization
     scl2::bytearray dump() const;
     static RuleEngineOperationRequest load(const scl2::bytearray& data);
+
+    /// Whether the request is consistent enough to act on: a known operation, a level that
+    /// can actually be requested, a payload within limits, and the fields the operation
+    /// needs. See AutoSudoRequest::validate().
+    bool validate(std::string& reason) const;
 };
 
 scl2_check_generic_dump_load(RuleEngineOperationRequest);
@@ -105,3 +115,19 @@ struct RuleListResponse {
 };
 
 scl2_check_generic_dump_load(RuleListResponse);
+
+
+// ── The request frame ─────────────────────────────────────────────
+//
+// A client request on the wire is: the protocol version, the request type, then the payload.
+// The version leads so that a service refuses a client it does not speak to before it reads
+// anything else - a request that is one version off would otherwise be parsed into fields
+// that mean something else.
+
+/// Build the frame a client sends.
+scl2::bytearray makeRequestFrame(ClientRequestType type, const scl2::bytearray& payload);
+
+/// The service side of makeRequestFrame(). A frame that cannot be used - a different version,
+/// an unknown type, an empty body - is refused with a reason, and none of it is interpreted.
+bool parseRequestFrame(const scl2::bytearray& frame, ClientRequestType& type,
+                       scl2::bytearray& payload, std::string& reason);

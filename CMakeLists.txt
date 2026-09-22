@@ -33,7 +33,7 @@ add_library(protocol STATIC src/protocol.cpp)
 target_link_libraries(protocol PRIVATE SharedCppLib2::basic)
 
 # service
-add_executable(AutoSudoSvc src/service_main.cpp src/wintoken.cpp src/approval.cpp)
+add_executable(AutoSudoSvc src/service_main.cpp src/wintoken.cpp src/approval.cpp src/callerid.cpp)
 target_link_libraries(AutoSudoSvc protocol authlib wtsapi32 userenv SharedCppLib2::logt SharedCppLib2::platform SharedCppLib2::pipe SharedCppLib2::sha256 SharedCppLib2::singleinst) # auth
 target_include_directories(AutoSudoSvc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 

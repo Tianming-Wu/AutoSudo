@@ -1,5 +1,43 @@
 #include "protocol.hpp"
 
+#include <stdexcept>
+#include <string>
+
+namespace {
+
+// The values a client may ask for. Everything on the wire is untrusted: a request
+// carrying something outside these sets is refused, not repaired.
+
+bool isKnownRuleOperation(RuleEngineOperation op)
+{
+    switch(op) {
+    case RuleEngineOperation::Create:
+    case RuleEngineOperation::Modify:
+    case RuleEngineOperation::Delete:
+    case RuleEngineOperation::Move:
+    case RuleEngineOperation::List:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// User, Admin and System are the levels a caller may ask for. Custom has no token
+// behind it, and NotFound is what an evaluation reports - neither is a request.
+bool isRequestableLevel(PermissionLevel level)
+{
+    switch(level) {
+    case PermissionLevel::User:
+    case PermissionLevel::Admin:
+    case PermissionLevel::System:
+        return true;
+    default:
+        return false;
+    }
+}
+
+} // namespace
+
 scl2::bytearray AutoSudoRequest::dump(const AutoSudoRequest &asr)
 {
     scl2::bytearray data;
@@ -52,6 +90,40 @@ AutoSudoRequest AutoSudoRequest::load(const scl2::bytearray &data)
     return req;
 }
 
+bool AutoSudoRequest::validate(std::string &reason) const
+{
+    if (executableFullPath.empty() || executableFullPath.size() > limits::maxPathChars) {
+        reason = "empty or oversized executable path";
+        return false;
+    }
+
+    if (workingDirectory.size() > limits::maxPathChars || calledPath.size() > limits::maxPathChars) {
+        reason = "oversized working directory or called path";
+        return false;
+    }
+
+    if (arguments.size() > limits::maxArguments) {
+        reason = "too many arguments";
+        return false;
+    }
+
+    for (const auto& argument : arguments) {
+        if (argument.size() > limits::maxArgumentChars) {
+            reason = "an argument is too long";
+            return false;
+        }
+    }
+
+    // The level decides which token the service goes looking for, and it is compared
+    // against what a rule allows, so an unknown one is not a value to carry on with.
+    if (!isRequestableLevel(requestedPermissionLevel)) {
+        reason = "unknown permission level " + std::to_string(static_cast<int>(requestedPermissionLevel));
+        return false;
+    }
+
+    return true;
+}
+
 
 
 scl2::bytearray RuleEngineOperationRequest::dump() const {
@@ -62,7 +134,7 @@ scl2::bytearray RuleEngineOperationRequest::dump() const {
     data.append(ruleEType);
     data.append(ruleAction);
     data.append(ruleAllowUpTo);
-    data.append<size_t>(payload.size());
+    data.append(static_cast<uint32_t>(payload.size()));
     data.append(payload);
     
     // Serialize optional values
@@ -88,15 +160,10 @@ RuleEngineOperationRequest RuleEngineOperationRequest::load(const scl2::bytearra
     op.ruleAction = data.read<uint32_t>();
     op.ruleAllowUpTo = data.read<PermissionLevel>();
     
-    size_t payloadSize = data.read<size_t>();
-    if (payloadSize > 0) {
-        // Read payload bytes
-        scl2::bytearray tempPayload;
-        for (size_t i = 0; i < payloadSize; ++i) {
-            tempPayload.append(data.read<uint8_t>());
-        }
-        op.payload = tempPayload;
-    }
+    const uint32_t payloadSize = data.read<uint32_t>();
+    if(payloadSize > limits::maxRulePayloadBytes)
+        throw std::runtime_error("RuleEngineOperationRequest::load: payload exceeds the limit");
+    op.payload = data.readBytes(payloadSize);
     
     // Deserialize optional values
     bool hasInsertAt = data.read<bool>();
@@ -110,6 +177,38 @@ RuleEngineOperationRequest RuleEngineOperationRequest::load(const scl2::bytearra
     }
     
     return op;
+}
+
+bool RuleEngineOperationRequest::validate(std::string &reason) const
+{
+    if(!isKnownRuleOperation(op)) {
+        reason = "unknown rule operation " + std::to_string(static_cast<uint16_t>(op));
+        return false;
+    }
+
+    if(!isRequestableLevel(ruleAllowUpTo)) {
+        reason = "unknown rule permission level " + std::to_string(static_cast<int>(ruleAllowUpTo));
+        return false;
+    }
+
+    if(payload.size() > limits::maxRulePayloadBytes) {
+        reason = "rule payload is larger than the limit";
+        return false;
+    }
+
+    // A rule is never created with uid 0: the engine hands out the smallest free number,
+    // and 0 is what it reports when it runs out. So 0 is not a rule to act on.
+    if(op != RuleEngineOperation::Create && op != RuleEngineOperation::List && targetUid == 0) {
+        reason = "operation without a target rule";
+        return false;
+    }
+
+    if(op == RuleEngineOperation::Move && !moveToOrder.has_value()) {
+        reason = "move without a target order";
+        return false;
+    }
+
+    return true;
 }
 
 scl2::bytearray RuleEngineOperationResult::dump() const {
@@ -136,7 +235,7 @@ scl2::bytearray RuleEntry::dump() const {
     data.append(etype);
     data.append(action);
     data.append(allowUpTo);
-    data.append<size_t>(payload.size());
+    data.append(static_cast<uint32_t>(payload.size()));
     data.append(payload);
     return data;
 }
@@ -150,25 +249,20 @@ RuleEntry RuleEntry::load(const scl2::bytearray &data) {
     entry.action = data.read<uint32_t>();
     entry.allowUpTo = data.read<PermissionLevel>();
     
-    size_t payloadSize = data.read<size_t>();
-    if (payloadSize > 0) {
-        // Read payload bytes
-        scl2::bytearray tempPayload;
-        for (size_t i = 0; i < payloadSize; ++i) {
-            tempPayload.append(data.read<uint8_t>());
-        }
-        entry.payload = tempPayload;
-    }
+    const uint32_t payloadSize = data.read<uint32_t>();
+    if(payloadSize > limits::maxRulePayloadBytes)
+        throw std::runtime_error("RuleEntry::load: payload exceeds the limit");
+    entry.payload = data.readBytes(payloadSize);
     
     return entry;
 }
 
 scl2::bytearray RuleListResponse::dump() const {
     scl2::bytearray data;
-    data.append<size_t>(rules.size());
+    data.append(static_cast<uint32_t>(rules.size()));
     for (const auto& rule : rules) {
         scl2::bytearray ruleData = rule.dump();
-        data.append<size_t>(ruleData.size());
+        data.append(static_cast<uint32_t>(ruleData.size()));
         data.append(ruleData);
     }
     return data;
@@ -176,19 +270,65 @@ scl2::bytearray RuleListResponse::dump() const {
 
 RuleListResponse RuleListResponse::load(const scl2::bytearray &data) {
     RuleListResponse response;
-    size_t ruleCount = data.read<size_t>();
-    
-    for (size_t i = 0; i < ruleCount; ++i) {
-        size_t ruleSize = data.read<size_t>();
-        // Create a temporary bytearray containing the rule data
-        scl2::bytearray ruleData;
-        for (size_t j = 0; j < ruleSize; ++j) {
-            ruleData.append(data.read<uint8_t>());
-        }
-        response.rules.push_back(RuleEntry::load(ruleData));
+    const uint32_t ruleCount = data.read<uint32_t>();
+    if (ruleCount > limits::maxRules)
+        throw std::runtime_error("RuleListResponse::load: more rules than the limit allows");
+
+    response.rules.reserve(ruleCount);
+    for (uint32_t i = 0; i < ruleCount; ++i) {
+        const uint32_t ruleSize = data.read<uint32_t>();
+        if (ruleSize > limits::maxRuleBytes)
+            throw std::runtime_error("RuleListResponse::load: rule record exceeds the limit");
+        response.rules.push_back(RuleEntry::load(data.readBytes(ruleSize)));
     }
     
     return response;
+}
+
+
+scl2::bytearray makeRequestFrame(ClientRequestType type, const scl2::bytearray &payload)
+{
+    scl2::bytearray frame;
+    frame.append(static_cast<uint8_t>(PROTOCOL_VERSION));
+    frame.append(type);
+    frame.append(payload);
+    return frame;
+}
+
+bool parseRequestFrame(const scl2::bytearray &frame, ClientRequestType &type,
+                       scl2::bytearray &payload, std::string &reason)
+{
+    if (frame.size() < 2) {
+        reason = "request frame is too short";
+        return false;
+    }
+
+    const uint8_t version = frame.subarr(0, sizeof(uint8_t)).as<uint8_t>();
+    if (version != PROTOCOL_VERSION) {
+        reason = "protocol version mismatch, client " + std::to_string(version)
+               + ", service " + std::to_string(PROTOCOL_VERSION);
+        return false;
+    }
+
+    const uint8_t rawType = frame.subarr(sizeof(uint8_t), sizeof(uint8_t)).as<uint8_t>();
+    switch (static_cast<ClientRequestType>(rawType)) {
+    case ClientRequestType::ExecuteCommand:
+    case ClientRequestType::ServiceMgrCommand:
+    case ClientRequestType::RuleEngineCommand:
+        type = static_cast<ClientRequestType>(rawType);
+        break;
+    default:
+        reason = "unknown request type " + std::to_string(rawType);
+        return false;
+    }
+
+    payload = frame.subarr(2 * sizeof(uint8_t));
+    if (payload.empty()) {
+        reason = "request frame has no body";
+        return false;
+    }
+
+    return true;
 }
 
 

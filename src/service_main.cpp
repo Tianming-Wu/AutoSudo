@@ -4,6 +4,8 @@
 #include <random>
 #include <sstream>
 #include <iomanip>
+#include <mutex>
+#include <atomic>
 #include <userenv.h>
 #include <wtsapi32.h>
 #include <functional>
@@ -18,6 +20,7 @@
 #include "approval.hpp"
 
 #include "auth_ui.hpp"
+#include "callerid.hpp"
 
 #include <SharedCppLib2/platform.hpp>
 #include <SharedCppLib2/platform_windows.hpp>
@@ -28,10 +31,44 @@ SERVICE_STATUS serviceStatus = {0};
 SERVICE_STATUS_HANDLE serviceStatusHandle = nullptr;
 HANDLE serviceStopEvent = nullptr;
 
-HANDLE pipeThread = nullptr;
-bool shouldStopPipeThread = false;
-wchar_t originalDir[MAX_PATH] = {0};
-inline void dirBack() { SetCurrentDirectory(originalDir); }
+HANDLE execPipeThread = nullptr;
+HANDLE controlPipeThread = nullptr;
+std::atomic<bool> shouldStopPipeThread{false};
+
+// Whether a caller that is not elevated may touch the rules.
+//
+// A debug build accepts one, so that a non-elevated GUI can be debugged against a service
+// started from the same build. A release build never does: there the control channel
+// belongs to administrators, and UAC is the consent that changing a rule needs. Both the
+// descriptor the control channel is created with and the check on every connection follow
+// this one constant.
+#ifdef _DEBUG
+constexpr bool allowUnelevatedRuleCallers = true;
+#else
+constexpr bool allowUnelevatedRuleCallers = false;
+#endif
+
+// The two things a listener thread needs to know about its channel.
+struct PipeChannel {
+    const char* name;
+    scl2::pipe::permission_preset preset;
+    bool control;   // whether this channel carries rule operations
+};
+
+// The execution channel is open to every local process - that is what the product is for -
+// and the approval that follows is the only gate. The control channel is where that gate is
+// changed, so it is created for administrators and LocalSystem only.
+PipeChannel execChannel{execPipeName, scl2::pipe::permission_preset::Everyone, false};
+PipeChannel controlChannel{
+    controlPipeName,
+    allowUnelevatedRuleCallers ? scl2::pipe::permission_preset::Everyone
+                               : scl2::pipe::permission_preset::Administrators,
+    true};
+
+// The rule engine is read and written from both channels at once - an evaluation on the
+// execution channel while a rule is edited on the control channel - so everything that
+// touches it goes through this.
+std::mutex engineMutex;
 
 std::string GenerateBrokerPipeName() {
     std::random_device rd;
@@ -71,12 +108,8 @@ VOID WINAPI ServiceCtrlHandler(DWORD controlCode) {
                 SetEvent(serviceStopEvent);
             }
 
-            if (pipeThread) {
-                // This logic should be no longer needed, since we now have pipe-server.
-                WaitForSingleObject(pipeThread, 5000); // 最多等5秒
-                CloseHandle(pipeThread);
-                pipeThread = nullptr;
-            }
+            // The listener threads poll the flag above, and the main loop waits for them.
+            // Waiting here as well would mean closing the same handle twice.
 
             return;
             
@@ -99,16 +132,37 @@ void UpdateServiceStatus(DWORD state, DWORD checkpoint = 0, DWORD waitHint = 0) 
     }
 }
 
+// The name a permission level goes by in the confirmation UI. A lookup with a fallback,
+// not an index: PermissionLevel has more values than the three that have a name, and the
+// array this used to index had exactly three entries.
+const wchar_t* levelName(PermissionLevel level)
+{
+    switch(level) {
+    case PermissionLevel::User:   return L"USER";
+    case PermissionLevel::Admin:  return L"ADMIN";
+    case PermissionLevel::System: return L"SYSTEM";
+    default:                      return L"UNKNOWN";
+    }
+}
+
+// The same for the kind of confirmation being asked for. This one is only ever called with
+// a constant, and it stays a lookup for the same reason as the one above.
+const wchar_t* authUITypeName(AuthUIType type)
+{
+    switch(type) {
+    case AuthUIType::NoRuleMatched:     return L"NORULEMATCHED";
+    case AuthUIType::InsufficientLevel: return L"INSUFFICIENTLEVEL";
+    default:                            return L"NORULEMATCHED";
+    }
+}
+
 int RequestUserConfirmation(const AutoSudoRequest& context, AuthUIType type) {
     LOGT_LOCAL("RequestUserConfirmation");
 
-    // static const wchar_t* typeStr[] = {L"NOTFOUND", L"INSUFFICIENTLEVEL", L"HASHMISMATCH"};
-    static const wchar_t* levelStr[] = {L"USER", L"ADMIN", L"SYSTEM"};
-    
     // 构建确认对话框命令行
     std::wstring commandLine = (platform::executable_dir() / L"AuthUI.exe").wstring()
-        + L" " + AuthUITypeStr[static_cast<int>(type)]
-        + L" " + levelStr[static_cast<int>(context.requestedPermissionLevel)]
+        + L" " + authUITypeName(type)
+        + L" " + levelName(context.requestedPermissionLevel)
         + L" \"" + context.executableFullPath + L"\"";
 
     logt.debug() << "Auth UI command: " << commandLine;
@@ -169,19 +223,18 @@ std::wstring MakeFullCommandLine(const AutoSudoRequest& request) {
     return args.xjoin();
 }
 
-bool CreateProcessWithContext(const AutoSudoRequest& context) {
+bool CreateProcessWithContext(const AutoSudoRequest& context, HANDLE token) {
     LOGT_LOCAL("CreateProcessWithContext");
-    // 准备环境块
-    // LPVOID envBlock = nullptr;
-    // if (!context.environmentVariables.empty()) {
-    //     std::wstring envStr;
-    //     for (const auto& env : context.environmentVariables) {
-    //         envStr += env + L'\0';
-    //     }
-    //     envStr += L'\0';
-    //     envBlock = (LPVOID)envStr.c_str();
-    // }
-    
+
+    // The token for the level the rules approved. This used to be CreateProcess(), which
+    // runs the child with the token of the service itself - LocalSystem - whatever level
+    // the request named and whatever a rule allowed. The token is what decides what the
+    // child runs as, on this path as on the session one.
+    if (token == nullptr) {
+        logt.error() << "CreateProcessWithContext was called without a token.";
+        return false;
+    }
+
     STARTUPINFO si = {0};
     si.cb = sizeof(STARTUPINFO);
     si.lpDesktop = const_cast<LPWSTR>(L"winsta0\\default");
@@ -190,19 +243,20 @@ bool CreateProcessWithContext(const AutoSudoRequest& context) {
 
     std::wstring fullCommandLine = MakeFullCommandLine(context);
     
-    if (!CreateProcess(
+    if (!CreateProcessAsUser(
+        token,
         nullptr,
         const_cast<LPWSTR>(fullCommandLine.c_str()),
         nullptr,
         nullptr,
         FALSE,
         CREATE_NEW_CONSOLE | CREATE_UNICODE_ENVIRONMENT,
-        nullptr, // envBlock,
+        nullptr,
         context.workingDirectory.empty() ? nullptr : context.workingDirectory.c_str(),
         &si,
         &pi
     )) {
-        logt.error() << "CreateProcess failed: " << platform::windows::TranslateLastError();
+        logt.error() << "CreateProcessAsUser failed: " << platform::windows::TranslateLastError();
         return false;
     }
 
@@ -225,16 +279,16 @@ bool CreateProcessInUserSession(const AutoSudoRequest& request, std::string* bro
     // }
     
     logt.debug() << "Creating process in session: " << targetSessionId;
-    
-    if (!request.calledPath.empty()) {
-        if (SetCurrentDirectory(request.calledPath.c_str())) {
-            logt.debug() << "Changed working directory to: " << request.calledPath;
-        } else {
-            logt.warn() << "Failed to change working directory to: " << request.calledPath;
-        }
+
+    // The directory the caller invoked AutoSudo from, which a plain `autosudo tool.exe`
+    // is expected to run in. It used to reach the child by changing the current directory
+    // of the whole service - a global, shared by two listener threads now, and a race -
+    // so it is passed to CreateProcessAsUser instead.
+    std::wstring workingDirectoryForCreate = request.workingDirectory;
+    if (workingDirectoryForCreate.empty()) {
+        workingDirectoryForCreate = request.calledPath;
     }
 
-    std::wstring workingDirectoryForCreate = request.workingDirectory;
     if (!workingDirectoryForCreate.empty()) {
         std::error_code wdEc;
         fs::path wdPath(workingDirectoryForCreate);
@@ -279,7 +333,6 @@ bool CreateProcessInUserSession(const AutoSudoRequest& request, std::string* bro
     } catch (const std::exception& ex) {
         logt.error() << "Exception during approval evaluation: " << ex.what();
         // 评估失败，视为拒绝
-        dirBack();
         return false;
     }
 
@@ -291,7 +344,6 @@ bool CreateProcessInUserSession(const AutoSudoRequest& request, std::string* bro
         case ApprovalResultId::Denied:
             logt.info() << "Authorization denied by approval engine" << (apr.reason.has_value() ? ", reason: " + apr.reason.value() : "");
             ///TODO: Post a toast notification to inform the user about the denial and possible reasons.
-            dirBack();
             return false;
 
         case ApprovalResultId::Approved:
@@ -319,7 +371,6 @@ bool CreateProcessInUserSession(const AutoSudoRequest& request, std::string* bro
             // Insufficient level is not supported by the current RuleEngine design.
 
             if (RequestUserConfirmation(request, AuthUIType::NoRuleMatched) != static_cast<int>(AuthUIResult::Allow)) {
-                dirBack();
                 return false;
             }
             // 用户确认，更新权限级别
@@ -327,7 +378,6 @@ bool CreateProcessInUserSession(const AutoSudoRequest& request, std::string* bro
             break;
         case ApprovalResultId::Fail:
             logt.error() << "Authorization evaluation failed, treating as Denied." << (apr.reason.has_value() ? " Reason: " + apr.reason.value() : "");
-            dirBack();
             return false;
         default:
             logt.fatal() << "Unexpected approval result.";
@@ -340,7 +390,6 @@ bool CreateProcessInUserSession(const AutoSudoRequest& request, std::string* bro
         // 获取令牌失败，退出
         logt.error() << "Failed to obtain token for the requested authorization level.";
 
-        dirBack();
         return false;
     }
 
@@ -352,7 +401,6 @@ bool CreateProcessInUserSession(const AutoSudoRequest& request, std::string* bro
         } else {
             logt.error() << "SetTokenInformation failed: " << platform::windows::TranslateLastError();
             CloseHandle(targetToken);
-            dirBack();
             return false;
         }
     }
@@ -466,21 +514,42 @@ bool CreateProcessInUserSession(const AutoSudoRequest& request, std::string* bro
     }
     CloseHandle(targetToken);
 
-    // 恢复原始工作目录
-    dirBack();
     return success;
 }
 
 // Handle process execution request
-bool HandleExecutionRequest(scl2::pipe::server_client& client, const scl2::bytearray& data) {
+bool HandleExecutionRequest(scl2::pipe::server_client& client, const scl2::bytearray& data,
+                           const callerid::CallerInfo& caller) {
     LOGT_LOCAL("HandleExecutionRequest");
 
     // Handle program execution request
     AutoSudoRequest request = AutoSudoRequest::load(data);
+
+    std::string reason;
+    if (!request.validate(reason)) {
+        logt.warn() << "Refusing an execution request from " << caller.describe() << ": " << reason;
+        client.write(scl2::bytearray::fromStdWString(L"ERROR: Invalid request"));
+        client.waitForFinished(std::chrono::seconds(1));
+        return false;
+    }
+
     logt.info() << "Received command: " << request.executableFullPath << ", args: " << request.arguments.xjoin();
     logt.debug() << "Request paths: workingDirectory='" << request.workingDirectory
                  << "', calledPath='" << request.calledPath << "'";
-    
+
+    // The session the caller is in is the session a process for that caller belongs in. A
+    // request naming another one asks to put a process on a different desktop - under fast
+    // user switching the console session is not necessarily the caller's - so the caller's
+    // own session is used instead. 0xFFFFFFFF means the caller's session could not be read,
+    // and then the request is left alone.
+    if (request.useCurrentSession && caller.sessionId != 0xFFFFFFFF
+        && request.targetSessionId != caller.sessionId) {
+        logt.warn() << "Execution request for session " << request.targetSessionId
+                    << " from a caller in session " << caller.sessionId
+                    << "; using the caller's session.";
+        request.targetSessionId = caller.sessionId;
+    }
+
     // 根据上下文决定创建方式
     bool success = false;
     std::string brokerToken;
@@ -491,7 +560,15 @@ bool HandleExecutionRequest(scl2::pipe::server_client& client, const scl2::bytea
         success = CreateProcessInUserSession(request, &brokerToken, &brokerMsgPipe);
     } else {
         logt.debug() << "using CreateProcessWithContext";
-        success = CreateProcessWithContext(request);
+        // No session was asked for, so the approved level is what the child runs as: the
+        // same token the session path goes looking for.
+        HANDLE token = wintoken::getToken(request.requestedPermissionLevel, request);
+        if (token == nullptr) {
+            logt.error() << "Failed to obtain token for the requested authorization level.";
+        } else {
+            success = CreateProcessWithContext(request, token);
+            CloseHandle(token);
+        }
     }
     
     // 发送响应
@@ -520,13 +597,42 @@ bool HandleExecutionRequest(scl2::pipe::server_client& client, const scl2::bytea
 }
 
 // Handle rule management operations
-bool ProcessRuleOperation(scl2::pipe::server_client& client, const scl2::bytearray& data) {
+bool ProcessRuleOperation(scl2::pipe::server_client& client, const scl2::bytearray& data,
+                          const callerid::CallerInfo& caller) {
     LOGT_LOCAL("ProcessRuleOperation");
     
     try {
         RuleEngineOperationRequest op = RuleEngineOperationRequest::load(data);
-        
+
+        std::string reason;
+        if (!op.validate(reason)) {
+            logt.warn() << "Refusing a rule operation from " << caller.describe() << ": " << reason;
+            RuleEngineOperationResult refusal;
+            refusal.success = false;
+            refusal.message = "Invalid rule operation: " + reason;
+            client.write(refusal.dump());
+            client.waitForFinished(std::chrono::seconds(1));
+            return false;
+        }
+
+        // One engine, two channels: an evaluation on the execution channel must not run
+        // while a rule is being replaced here.
+        std::lock_guard<std::mutex> lock(engineMutex);
+
         auto enginePtr = ApprovalEngine::instance();
+        if (enginePtr == nullptr) {
+            // The engine is created by the entry point. Reaching this means the process was
+            // started in a way that skipped it, and there is nothing to operate on - but
+            // that stays this connection's problem, not the service's.
+            logt.error() << "Rule operations are unavailable: no approval engine instance.";
+            RuleEngineOperationResult failure;
+            failure.success = false;
+            failure.message = "Rule engine is not available";
+            client.write(failure.dump());
+            client.waitForFinished(std::chrono::seconds(1));
+            return false;
+        }
+
         RuleEngineOperationResult result;
         
         switch (op.op) {
@@ -618,7 +724,7 @@ bool ProcessRuleOperation(scl2::pipe::server_client& client, const scl2::bytearr
     }
 }
 
-bool ProcessClientRequest(scl2::pipe::server_client& client) {
+bool ProcessClientRequest(scl2::pipe::server_client& client, bool controlChannel) {
     LOGT_LOCAL("ProcessClientRequest");
 
     // 读取请求数据
@@ -632,20 +738,67 @@ bool ProcessClientRequest(scl2::pipe::server_client& client) {
         return false;
     }
 
-    // The first byte indicates the request type
-    ClientRequestType reqType = data.subarr(0, sizeof(ClientRequestType)).as<ClientRequestType>();
+    // The size is checked before anything is interpreted: a request decides how much is
+    // read from it, and the peer does not get to decide that.
+    if (data.size() > limits::maxRequestBytes) {
+        logt.warn() << "Refusing a " << data.size() << " byte request, the limit is "
+                    << limits::maxRequestBytes << " bytes.";
+        return false;
+    }
 
-    logt.debug() << "Received client type: " << static_cast<int>(reqType) << ", data size: " << data.size(); 
+    // The frame carries the protocol version, the request type and the payload. A frame
+    // this build cannot use is refused as a whole - a request one version off would
+    // otherwise be read into fields that mean something else.
+    ClientRequestType reqType = ClientRequestType::ExecuteCommand;
+    scl2::bytearray payload;
+    std::string reason;
+    if (!parseRequestFrame(data, reqType, payload, reason)) {
+        logt.warn() << "Refusing a request: " << reason;
+        return false;
+    }
 
-    data = data.subarr(1); // Remove the request type byte
+    // Who is asking is read before anything is decided. It comes from the token the kernel
+    // attached to this connection, not from the request, so it is the one part of a request
+    // that a client cannot choose.
+    const callerid::CallerInfo caller = callerid::identify(client.nativeHandle());
+    logt.info() << "Request type " << static_cast<int>(reqType) << " on the "
+                << (controlChannel ? "control" : "execution") << " channel from "
+                << caller.describe();
+
+    if (controlChannel) {
+        // Rules decide what may run without asking the user, so changing them is an
+        // administrative act. The channel is created for administrators and LocalSystem;
+        // this is the same check at the level of the caller, because a descriptor belongs
+        // to the name and every instance of it, not to the conversation.
+        if (!caller.isPrivileged()) {
+            if (!allowUnelevatedRuleCallers) {
+                logt.warn() << "Refusing rule operations from " << caller.describe() << ".";
+                return false;   // the connection closes without a reply
+            }
+            logt.warn() << "Accepting rule operations from " << caller.describe()
+                        << " because this is a debug build.";
+        }
+
+        if (reqType != ClientRequestType::RuleEngineCommand) {
+            logt.warn() << "Refusing request type " << static_cast<int>(reqType)
+                        << " on the control channel.";
+            return false;
+        }
+
+        return ProcessRuleOperation(client, payload, caller);
+    }
 
     switch(reqType) {
     case ClientRequestType::ExecuteCommand:
-        return HandleExecutionRequest(client, data);
-    case ClientRequestType::ServiceMgrCommand:
-        return false;
+        return HandleExecutionRequest(client, payload, caller);
     case ClientRequestType::RuleEngineCommand:
-        return ProcessRuleOperation(client, data);
+        // Rule operations belong on the control channel, which is the one the service
+        // checks the caller on. Accepting them here would go around that check.
+        logt.warn() << "Refusing a rule operation on the execution channel from " << caller.describe() << ".";
+        return false;
+    case ClientRequestType::ServiceMgrCommand:
+        logt.warn() << "Refusing a service management request: not implemented.";
+        return false;
     default: {
         logt.error() << "Unknown client request type: " << static_cast<int>(reqType);
         return false;
@@ -654,44 +807,49 @@ bool ProcessClientRequest(scl2::pipe::server_client& client) {
 }
 
 DWORD WINAPI PipeListenerThread(LPVOID param) {
-    logt::claim("PipeListenerThread");
-    LOGT_LOCAL("PipeListenerThread");
-    logt.info() << "Pipe listener thread started";
+    const PipeChannel channel = *static_cast<const PipeChannel*>(param);
 
-    scl2::pipe::server server(R"(\\.\pipe\AutoSudoPipe)", scl2::pipe::permission_preset::Everyone);
+    logt::claim(channel.control ? "ControlPipeListener" : "PipeListener");
+    LOGT_LOCAL("PipeListenerThread");
+    logt.info() << "Pipe listener thread started on " << channel.name;
+
+    scl2::pipe::server server(channel.name, scl2::pipe::permissions(channel.preset));
 
     server.setPipeMode(scl2::pipe::mode::Message);
-    // Usually, 8KiB is enough for a single command.
 
     if(!server.start()) {
-        logt.error() << "Failed to start pipe server";
+        logt.error() << "Failed to start the pipe server on " << channel.name;
         return 1;
     }
 
     while (!shouldStopPipeThread) {
-        if (server.waitForNextConnection(std::chrono::seconds(1))) {
-            logt.debug() << "Client connected.";
-            
-            auto client = server.queryNextConnection();
+        if (!server.waitForNextConnection(std::chrono::seconds(1))) {
+            continue;   // the stop flag is checked at the top of the loop
+        }
 
-            if(client.valid()) {
-                ProcessClientRequest(client);
+        logt.debug() << "Client connected.";
 
-            } else {
-                logt.error() << "Failed to fetch client connection.";
+        auto client = server.queryNextConnection();
+
+        if(client.valid()) {
+            // Nothing a client can send is worth taking a SYSTEM service down for, so a
+            // bad message costs this one connection and nothing else.
+            try {
+                ProcessClientRequest(client, channel.control);
+            } catch (const std::exception& ex) {
+                logt.error() << "Request handling failed: " << ex.what();
+            } catch (...) {
+                logt.error() << "Request handling failed with a non-standard exception.";
             }
-            
-            // 断开连接
-            client.close();
-            logt.debug() << "Client disconnected";
+        } else {
+            logt.error() << "Failed to fetch client connection.";
         }
-        
-        // 检查停止标志
-        if (shouldStopPipeThread) {
-            break;
-        }
+
+        // 断开连接
+        client.close();
+        logt.debug() << "Client disconnected";
     }
-    
+
     logt.debug() << "Pipe listener thread exiting";
     return 0;
 }
@@ -702,13 +860,18 @@ void MainServiceLoop() {
 
     UpdateServiceStatus(SERVICE_RUNNING);
 
-    // 缓存当前工作目录
-    GetCurrentDirectory(MAX_PATH, originalDir);
+    if (allowUnelevatedRuleCallers) {
+        logt.warn() << "This is a debug build: the control channel is created with the "
+                       "Everyone descriptor and accepts unelevated rule callers, so that a "
+                       "non-elevated GUI can be debugged against it. Do not install this "
+                       "build as the service.";
+    }
 
     shouldStopPipeThread = false;
-    pipeThread = CreateThread(nullptr, 0, PipeListenerThread, nullptr, 0, nullptr);
-    if (!pipeThread) {
-        logt.error() << "Failed to create pipe listener thread";
+    execPipeThread = CreateThread(nullptr, 0, PipeListenerThread, const_cast<PipeChannel*>(&execChannel), 0, nullptr);
+    controlPipeThread = CreateThread(nullptr, 0, PipeListenerThread, const_cast<PipeChannel*>(&controlChannel), 0, nullptr);
+    if (!execPipeThread || !controlPipeThread) {
+        logt.error() << "Failed to create the pipe listener threads.";
         return;
     }
     
@@ -717,12 +880,15 @@ void MainServiceLoop() {
     shouldStopPipeThread = true;
     
     // 等待管道线程退出
-    if (pipeThread) {
-        logt.info() << "Waiting for pipe thread to finish...";
-        WaitForSingleObject(pipeThread, 5000);
-        CloseHandle(pipeThread);
-        pipeThread = nullptr;
+    HANDLE threads[2] = {execPipeThread, controlPipeThread};
+    for (HANDLE thread : threads) {
+        if (!thread) continue;
+        logt.info() << "Waiting for a pipe thread to finish...";
+        WaitForSingleObject(thread, 5000);
+        CloseHandle(thread);
     }
+    execPipeThread = nullptr;
+    controlPipeThread = nullptr;
     
     logt.info() << "Service main thread ended";
 }
@@ -737,7 +903,16 @@ VOID WINAPI ServiceMain(DWORD argc, LPTSTR* argv) {
 
     ApprovalEngine engine; // Create engine instance
 
-    engine.loadFile();
+    // A database that cannot be read must not keep the service from starting: no rules is
+    // "ask the user" for everything, which is the safe end of the scale.
+    try {
+        if(!engine.loadFile()) {
+            logt.error() << "Failed to load the approval rules, continuing with none.";
+        }
+    } catch (const std::exception& ex) {
+        logt.error() << "Exception while loading the approval rules: " << ex.what()
+                     << ", continuing with none.";
+    }
 
     serviceStatusHandle = RegisterServiceCtrlHandler(L"AutoSudoService", ServiceCtrlHandler);
     
@@ -807,6 +982,21 @@ int wmain(int argc, wchar_t** argv) {
         logt::setFilterLevel(LogLevel::Debug);
 
         logt.debug() << "Running in debug mode";
+
+        // The rule operations reach the engine through its single instance, which the
+        // service entry point creates. A debug run goes through this branch instead, so it
+        // has to create one too: without it, the first rule operation has nothing to talk
+        // to, and reaching through a null instance is what the check in
+        // ProcessRuleOperation exists for.
+        ApprovalEngine engine;
+        try {
+            if(!engine.loadFile()) {
+                logt.error() << "Failed to load the approval rules, continuing with none.";
+            }
+        } catch (const std::exception& ex) {
+            logt.error() << "Exception while loading the approval rules: " << ex.what()
+                         << ", continuing with none.";
+        }
         
         serviceStopEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
         MainServiceLoop();

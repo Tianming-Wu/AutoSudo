@@ -4,7 +4,9 @@
 #include <SharedCppLib2/logt.hpp>
 #include <chrono>
 
-RuleClient::RuleClient() : pipeName(R"(\\.\pipe\AutoSudoPipe)"), connected(false) {}
+// Rule operations change what may run without asking the user, so they go to the control
+// channel: the one the service creates for administrators and checks the caller on.
+RuleClient::RuleClient() : pipeName(controlPipeName), connected(false) {}
 
 RuleClient::~RuleClient() {}
 
@@ -118,7 +120,9 @@ bool RuleClient::sendOperation(const RuleEngineOperationRequest& opreq, RuleEngi
         return false;
     }
     
-    if (client.write(scl2::bytearray::fromTrivialType(ClientRequestType::RuleEngineCommand) + opreq.dump()) == 0) {
+    const scl2::bytearray request = makeRequestFrame(ClientRequestType::RuleEngineCommand, opreq.dump());
+
+    if (client.write(request) == 0) {
         logt.error() << "Failed to send rule operation to service.";
         return false;
     }
@@ -155,9 +159,7 @@ bool RuleClient::sendOperation(const RuleEngineOperationRequest& opreq, RuleList
     }
     
     // Send request type + operation data
-    scl2::bytearray requestData;
-    requestData.append(ClientRequestType::RuleEngineCommand);
-    requestData.append(opreq.dump());
+    const scl2::bytearray requestData = makeRequestFrame(ClientRequestType::RuleEngineCommand, opreq.dump());
     
     if (client.write(requestData) == 0) {
         logt.error() << "Failed to send rule list operation to service.";

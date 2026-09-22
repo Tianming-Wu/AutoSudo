@@ -137,7 +137,7 @@ uint16_t CreateDigitalSignatureRule(Rule::EType etype, Rule::Action action, Perm
 
 bool IsServiceAvailable(uint32_t timeoutMs)
 {
-    scl2::pipe::client client(R"(\\.\pipe\AutoSudoPipe)");
+    scl2::pipe::client client(execPipeName);
     return client.waitForConnection(std::chrono::milliseconds(timeoutMs));
 }
 

@@ -177,7 +177,7 @@ int ExecuteCommand(const std::wstring& commandLine, PermissionLevel permLevel = 
     logt.debug() << "Local request paths: workingDirectory='" << request.workingDirectory
                  << "', calledPath='" << request.calledPath << "'";
 
-    scl2::pipe::client client(R"(\\.\pipe\AutoSudoPipe)");
+    scl2::pipe::client client(execPipeName);
 
     if(!client.waitForConnection(std::chrono::seconds(1))) {
         logt.error() << "Failed to connect to AutoSudo service.";
@@ -198,9 +198,7 @@ int ExecuteCommand(const std::wstring& commandLine, PermissionLevel permLevel = 
 
     scl2::bytearray requestPayload = AutoSudoRequest::dump(request);
     
-    scl2::bytearray outbound;
-    outbound.append(ClientRequestType::ExecuteCommand);
-    outbound.append(requestPayload);
+    const scl2::bytearray outbound = makeRequestFrame(ClientRequestType::ExecuteCommand, requestPayload);
 
     if (client.write(outbound) == 0) {
         logt.error() << "Failed to send command to AutoSudo service.";
