@@ -10,9 +10,9 @@
 
 #include <vector>
 
-// The logt signature for this file. logt is a class, and the object that carries the
-// stream operators is the signature declared here (or a local one, via LOGT_LOCAL).
-LOGT_MODULE("callerid");
+// Logging is claimed per function, with LOGT_LOCAL naming it in full. A file-wide LOGT_MODULE
+// signature was used here until it turned out that lines written through it never reached the
+// log - the worst possible property for the code that has to report why a caller was refused.
 
 namespace callerid {
 
@@ -35,26 +35,48 @@ std::string sidToString(PSID sid)
     return result;
 }
 
-// Whether the token in place holds an enabled member of a well-known group.
+// The attributes the token gives a well-known group, or 0 when the token does not hold it.
 //
-// CheckTokenMembership(nullptr, ...) looks at the token of the calling thread, which is
-// the impersonation token while one is in place, and it accounts for deny-only SIDs. That
-// is the difference that matters here: an administrator who did not go through UAC is in
-// the group on paper but holds a filtered token, and only the second one may change rules.
-bool tokenInGroup(WELL_KNOWN_SID_TYPE type)
+// CheckTokenMembership(nullptr, ...) was used here, and it answered "not a member" for a token
+// whose group list holds Administrators enabled and not deny-only - the elevated administrator
+// this function exists to recognise. So the group list is read directly instead: the attribute is
+// the whole answer, and it is also where the difference that matters lives. An administrator who
+// did not go through UAC holds the group with SE_GROUP_USE_FOR_DENY_ONLY, and only the other one
+// may change rules.
+DWORD tokenGroupAttributes(HANDLE token, WELL_KNOWN_SID_TYPE type)
 {
     BYTE sidBuffer[SECURITY_MAX_SID_SIZE];
     DWORD sidSize = sizeof(sidBuffer);
     if (!CreateWellKnownSid(type, nullptr, sidBuffer, &sidSize)) {
-        return false;
+        return 0;
     }
 
-    BOOL isMember = FALSE;
-    if (!CheckTokenMembership(nullptr, sidBuffer, &isMember)) {
-        return false;
+    DWORD size = 0;
+    GetTokenInformation(token, TokenGroups, nullptr, 0, &size);
+    if (size == 0) {
+        return 0;
     }
 
-    return isMember != FALSE;
+    std::vector<std::byte> buffer(size);
+    if (!GetTokenInformation(token, TokenGroups, buffer.data(), size, &size)) {
+        return 0;
+    }
+
+    const auto* groups = reinterpret_cast<const TOKEN_GROUPS*>(buffer.data());
+    for (DWORD i = 0; i < groups->GroupCount; ++i) {
+        if (EqualSid(groups->Groups[i].Sid, sidBuffer)) {
+            return groups->Groups[i].Attributes;
+        }
+    }
+
+    return 0;
+}
+
+bool tokenInGroup(HANDLE token, WELL_KNOWN_SID_TYPE type)
+{
+    const DWORD attributes = tokenGroupAttributes(token, type);
+    return (attributes & SE_GROUP_ENABLED) != 0
+        && (attributes & SE_GROUP_USE_FOR_DENY_ONLY) == 0;
 }
 
 std::wstring queryImagePath(DWORD processId)
@@ -103,6 +125,8 @@ std::string CallerInfo::describe() const
 
 CallerInfo identify(void* nativeHandle)
 {
+    LOGT_LOCAL("callerid::identify");
+
     CallerInfo info;
 
     HANDLE pipe = static_cast<HANDLE>(nativeHandle);
@@ -134,7 +158,7 @@ CallerInfo identify(void* nativeHandle)
     }
 
     info.identified = true;
-    info.elevated = tokenInGroup(WinBuiltinAdministratorsSid);
+    info.elevated = tokenInGroup(token, WinBuiltinAdministratorsSid);
 
     DWORD returned = 0;
     DWORD sessionId = 0;
