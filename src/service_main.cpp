@@ -21,6 +21,7 @@
 
 #include "auth_ui.hpp"
 #include "callerid.hpp"
+#include "buildflags.hpp"
 
 #include <SharedCppLib2/platform.hpp>
 #include <SharedCppLib2/platform_windows.hpp>
@@ -35,18 +36,9 @@ HANDLE execPipeThread = nullptr;
 HANDLE controlPipeThread = nullptr;
 std::atomic<bool> shouldStopPipeThread{false};
 
-// Whether a caller that is not elevated may touch the rules.
-//
-// A debug build accepts one, so that a non-elevated GUI can be debugged against a service
-// started from the same build. A release build never does: there the control channel
-// belongs to administrators, and UAC is the consent that changing a rule needs. Both the
-// descriptor the control channel is created with and the check on every connection follow
-// this one constant.
-#ifdef _DEBUG
-constexpr bool allowUnelevatedRuleCallers = true;
-#else
-constexpr bool allowUnelevatedRuleCallers = false;
-#endif
+// allowUnelevatedRuleCallers (buildflags.hpp) is what a debug build relaxes: the control
+// channel is created for everyone, a caller that is not elevated is accepted, and the key
+// of the rule database is left with the process default descriptor.
 
 // The two things a listener thread needs to know about its channel.
 struct PipeChannel {

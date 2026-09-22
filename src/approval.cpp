@@ -6,14 +6,17 @@
 #include <chrono>
 #include <cstring>
 #include <stdexcept>
+#include <string_view>
 
 // Thanks to the single-instance design of logt, this is as easy as including the header here.
 #include <SharedCppLib2/logt.hpp>
 #include <SharedCppLib2/basics.hpp>
 #include <SharedCppLib2/sha256.hpp>
 #include <SharedCppLib2/string.hpp>
+#include <SharedCppLib2/xkeydb.hpp>
 
 #include "authlib.hpp"
+#include "keyvault.hpp"
 
 SINGLE_INSTANCE_IMPL(ApprovalEngine);
 
@@ -109,6 +112,21 @@ bool isKnownAllowUpTo(PermissionLevel level)
 // applied, and every field after the first would mean something else.
 constexpr char databaseMagic[] = "ASRD";
 constexpr uint16_t databaseFormatVersion = 2;
+
+// The file the rules live in, and the file holding the key that authenticates it. Both sit
+// next to the service.
+constexpr const char* kDatabaseFileName = "rules.db";
+constexpr const char* kKeyFileName = "rules.key";
+
+// The database holds one entry: the engine, exactly as ApprovalEngine::dump() writes it.
+// Rules are a policy as a whole - half of one is not a policy - so the whole thing is
+// authenticated and replaced together.
+constexpr std::string_view kEngineKey = "engine";
+
+// lock() derives its keys with PBKDF2. This secret is 32 random bytes rather than something
+// a person chose, so there is no guessing to slow down; the rounds would only cost the
+// service time on every start.
+constexpr uint32_t kKdfIterations = 1000;
 
 // Move a file that could not be parsed out of the way, so a later save does not write
 // over it, and so it is still there for whoever wants to look at it.
@@ -535,37 +553,45 @@ bool ApprovalEngine::loadFile()
         return true;
     }
 
-    std::ifstream ifs(filePath, std::ios::binary);
-    if(!ifs.is_open() || ifs.bad()) {
-        logt.error() << "Failed to open approval rules file: " << filePath;
-        return false;
-    }
-
-    if(ifs.peek() == std::ifstream::traits_type::eof()) {
-        logt.info() << "Loaded 0 rules, rules.db is empty.";
-        rules.clear();
-        return true;
-    }
-
-    scl2::bytearray data;
-    if(!data.readAllFromStream(ifs)) {
-        logt.error() << "Failed to read approval rules file: " << filePath;
-        return false;
-    }
-
-    if(data.empty()) {
-        rules.clear();
-        logt.info() << "Loaded 0 rules, rules.db is empty.";
-        return true;
-    }
-
+    // The database is authenticated, and it has to be opened as one before a single rule is
+    // read from it. Everything that can go wrong lands in the same place: a file that is not
+    // ours, one from an older build, one that somebody edited, a key that no longer matches.
+    // The file is kept aside and the service carries on with no rules, which asks the user
+    // about everything - the safe end of the scale.
     try {
-        ApprovalEngine loaded = ApprovalEngine::load(data); // Actual load logic
+        scl2::xkeydb::database db(filePath);
+
+        if(!db.valid()) {
+            logt.error() << "The rules database cannot be used: "
+                         << scl2::xkeydb::database::describe(db.status());
+            quarantineFile(filePath);
+            rules.clear();
+            return false;
+        }
+
+        // This service always writes it with a secret, so a file without one is not ours,
+        // however valid it looks.
+        if(!db.needsSecret()) {
+            logt.error() << "The rules database is not authenticated, refusing it.";
+            quarantineFile(filePath);
+            rules.clear();
+            return false;
+        }
+
+        db.unlock(keyvault::acquire(platform::executable_dir() / kKeyFileName));
+        db.open();
+
+        scl2::variant stored;
+        if(!db.get(kEngineKey, stored)) {
+            logt.info() << "Loaded 0 rules, the database holds none.";
+            rules.clear();
+            return true;
+        }
+
+        ApprovalEngine loaded = ApprovalEngine::load(stored.as_bytearray());
         rules = std::move(loaded.rules);
     } catch (const std::exception& ex) {
-        // A database that cannot be read is not a reason to stay down: with no rules the
-        // default action asks the user, which is the safe end of the scale.
-        logt.error() << "Failed to parse " << filePath << ": " << ex.what();
+        logt.error() << "Failed to load " << filePath << ": " << ex.what();
         quarantineFile(filePath);
         rules.clear();
         return false;
@@ -601,47 +627,51 @@ bool ApprovalEngine::save() const
         return true;   
     }
 
-    const fs::path tempPath = filePath.wstring() + L".tmp";
+    try {
+        const scl2::bytearray data = ApprovalEngine::dump(*this);
+        const scl2::secure_bytearray key = keyvault::acquire(platform::executable_dir() / kKeyFileName);
 
-    std::ofstream ofs(tempPath, std::ios::binary | std::ios::trunc);
-    if(!ofs.is_open() || ofs.bad()) {
-        logt.error() << "Failed to open temporary approval rules file for write: " << tempPath;
-        return false;
-    }
-
-    scl2::bytearray data = ApprovalEngine::dump(*this);
-    data.writeRaw(ofs);
-
-    ofs.flush();
-    const bool writeOk = ofs.good();
-    ofs.close();
-
-    if(!writeOk) {
-        std::error_code ec;
-        fs::remove(tempPath, ec);
-        logt.error() << "Failed to write temporary approval rules file: " << tempPath;
-        return false;
-    }
-
-    std::error_code ec;
-    if(fs::exists(filePath)) {
-        fs::copy_file(filePath, bakPath, fs::copy_options::overwrite_existing, ec);
-        if(ec) {
-            logt.warn() << "Failed to backup approval rules file before replace: " << bakPath << ", error: " << ec.message();
-            ec.clear();
+        // A file that cannot be built on is moved aside first: initialize() refuses to write
+        // over anything, and that is the behaviour worth keeping - only a file that is
+        // already the shape of an empty database gets written to.
+        {
+            scl2::xkeydb::database probe(filePath);
+            if(probe.exists() && (!probe.valid() || !probe.needsSecret())) {
+                logt.error() << "Replacing an unusable rules database: "
+                             << scl2::xkeydb::database::describe(probe.status());
+                quarantineFile(filePath);
+            }
         }
-    }
 
-    fs::copy_file(tempPath, filePath, fs::copy_options::overwrite_existing, ec);
-    if(ec) {
-        fs::remove(tempPath, ec);
-        logt.error() << "Failed to replace approval rules file: " << filePath << ", error: " << ec.message();
+        scl2::xkeydb::database db(filePath);
+        if(!db.exists()) {
+            db.initialize();
+        }
+
+        if(!db.needsSecret()) {
+            // Only lock() brings a secret, and a database without one is one the next start
+            // has to refuse - so a new one gets its key before anything is written to it.
+            // cipher_algo::none is the point: the rules are authenticated, not encrypted.
+            db.lock(key, scl2::xkeydb::cipher_algo::none, kKdfIterations);
+        } else {
+            db.unlock(key);
+        }
+
+        db.open();
+        db.clear();
+
+        const scl2::xkeydb::xkeydb_error set = db.setValue(kEngineKey, scl2::variant(data));
+        if(set != scl2::xkeydb::xkeydb_error::None) {
+            logt.error() << "Failed to store the rules: " << scl2::xkeydb::database::describe(set);
+            return false;
+        }
+
+        // save() replaces the file through a temporary one, so a failure here leaves the
+        // previous database in place rather than half of a new one.
+        db.save();
+    } catch (const std::exception& ex) {
+        logt.error() << "Failed to save " << filePath << ": " << ex.what();
         return false;
-    }
-
-    fs::remove(tempPath, ec);
-    if(ec) {
-        logt.warn() << "Failed to remove temporary approval rules file: " << tempPath << ", error: " << ec.message();
     }
 
     return true;
