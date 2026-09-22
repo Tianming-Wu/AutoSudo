@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.10)
 
 project(AutoSudo
-    VERSION 4.0.1
+    VERSION 5.0.0
     LANGUAGES CXX
 )
 
@@ -90,7 +90,7 @@ configure_package_config_file(
 
 write_basic_package_version_file(
     ${CMAKE_CURRENT_BINARY_DIR}/AutoSudoSdkConfigVersion.cmake
-    VERSION 1.0.0
+    VERSION 2.0.0
     COMPATIBILITY SameMajorVersion
 )
 
