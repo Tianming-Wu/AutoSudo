@@ -36,7 +36,7 @@ bool isNonServiceMode() {
 }
 
 HANDLE getSystemToken(const AutoSudoRequest& request) {
-    LOGT_LOCAL("getSystemToken");
+    LOGT_LOCAL("wintoken::getSystemToken");
 
     HANDLE systemToken = nullptr;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ALL_ACCESS, &systemToken)) {
@@ -57,7 +57,7 @@ HANDLE getSystemToken(const AutoSudoRequest& request) {
 }
 
 HANDLE getUserToken(const AutoSudoRequest& request) {
-    LOGT_LOCAL("getUserToken");
+    LOGT_LOCAL("wintoken::getUserToken");
 
     HANDLE userToken = nullptr;
     if (!WTSQueryUserToken(request.targetSessionId, &userToken)) {
@@ -78,7 +78,7 @@ HANDLE getUserToken(const AutoSudoRequest& request) {
 }
 
 HANDLE getAdminToken(const AutoSudoRequest& request) {
-    LOGT_LOCAL("getAdminToken");
+    LOGT_LOCAL("wintoken::getAdminToken");
 
     HANDLE userToken = getUserToken(request);
     if (userToken == nullptr) {

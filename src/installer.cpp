@@ -6,9 +6,12 @@
 
 namespace svc {
 
-LOGT_MODULE("ServiceInstaller");
+// Logging is claimed per function, with LOGT_LOCAL naming it in full. A file-wide signature is
+// constructed before main adds the channels, which is how it loses them.
 
-bool InstallService() {
+bool InstallService()
+{
+    LOGT_LOCAL("svc::InstallService");
     SC_HANDLE scm = OpenSCManager(nullptr, nullptr, SC_MANAGER_ALL_ACCESS);
     if (!scm) {
         logt.error() << "OpenSCManager failed: " << platform::windows::TranslateLastError();
@@ -89,7 +92,9 @@ bool InstallService() {
     return true;
 }
 
-bool UninstallService() {
+bool UninstallService()
+{
+    LOGT_LOCAL("svc::UninstallService");
     SC_HANDLE scm = OpenSCManager(nullptr, nullptr, SC_MANAGER_ALL_ACCESS);
     if (!scm) {
         return false;
@@ -119,7 +124,9 @@ bool UninstallService() {
     return success;
 }
 
-bool _StartService() {
+bool _StartService()
+{
+    LOGT_LOCAL("svc::_StartService");
     SC_HANDLE scm = OpenSCManager(nullptr, nullptr, SC_MANAGER_ALL_ACCESS);
     if (!scm) {
         logt.error() << "OpenSCManager failed: " << platform::windows::TranslateLastError();
@@ -156,7 +163,9 @@ bool _StartService() {
     return success;
 }
 
-bool _StopService() {
+bool _StopService()
+{
+    LOGT_LOCAL("svc::_StopService");
     SC_HANDLE scm = OpenSCManager(nullptr, nullptr, SC_MANAGER_ALL_ACCESS);
     if (!scm) {
         logt.error() << "OpenSCManager failed: " << platform::windows::TranslateLastError();

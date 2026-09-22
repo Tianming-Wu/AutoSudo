@@ -9,14 +9,18 @@
 
 namespace auth {
 
-LOGT_DEFINE(list, "auth::list");
+// Each method claims its own signature with LOGT_LOCAL. The class-wide one that used to be here
+// (LOGT_DECLARE / LOGT_DEFINE) copied the channel list at construction, which is too early for a
+// file-scope object to see the channels main adds.
 list authlist;
 
 list::list()
     : filePath(platform::executable_dir()/".authlist")
 {}
 
-void list::load() {
+void list::load()
+{
+    LOGT_LOCAL("auth::list::load");
     m_authlist.clear();
 
     if(!fs::exists(filePath)) {
@@ -91,7 +95,9 @@ void list::load() {
     logt.info() << "Loaded " << loadedCount << " entries from allow list";
 }
 
-void list::save() {
+void list::save()
+{
+    LOGT_LOCAL("auth::list::save");
     std::ofstream ofs(filePath);
     if(!ofs.is_open() || ofs.bad()) {
         logt.error() << "Failed to save allow list: " << filePath;
@@ -112,14 +118,18 @@ void list::save() {
     logt.info() << "Saved " << m_authlist.size() << " entries to allow list";
 }
 
-void list::insert(const list::authdat &dat) {
+void list::insert(const list::authdat &dat)
+{
+    LOGT_LOCAL("auth::list::insert");
     logt.info() << "Inserting new entry to allow list: " << dat.targetPath;
     // m_authlist.insert(std::make_pair(dat.targetPath, dat));
     m_authlist[dat.targetPath] = dat;
     save();
 }
 
-void list::insert(const fs::path &path, AuthLevel al) {
+void list::insert(const fs::path &path, AuthLevel al)
+{
+    LOGT_LOCAL("auth::list::insert");
     if(!fs::exists(path)) {
         logt.error() << "File does not exist: " << path;
         return;
@@ -146,7 +156,9 @@ void list::insert(const fs::path &path, AuthLevel al) {
     }
 }
 
-void list::remove(const fs::path &path) {
+void list::remove(const fs::path &path)
+{
+    LOGT_LOCAL("auth::list::remove");
     auto it = m_authlist.find(path);
     if(it != m_authlist.end()) {
         logt.info() << "Removing entry from allow list: " << path;
@@ -157,7 +169,9 @@ void list::remove(const fs::path &path) {
     }
 }
 
-AuthLevel list::test(const fs::path &path, AuthLevel requestedLevel) {
+AuthLevel list::test(const fs::path &path, AuthLevel requestedLevel)
+{
+    LOGT_LOCAL("auth::list::test");
     if(requestedLevel > AuthLevel::System || requestedLevel < AuthLevel::User) return AuthLevel::Invalid;
     auto it = m_authlist.find(path);
     if(it != m_authlist.end()) {

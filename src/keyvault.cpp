@@ -15,7 +15,8 @@
 #include <stdexcept>
 #include <string>
 
-LOGT_MODULE("keyvault");
+// Logging is claimed per function, with LOGT_LOCAL naming it in full. A file-wide signature is
+// constructed before main adds the channels, which is how it loses them.
 
 namespace keyvault {
 
@@ -182,6 +183,7 @@ scl2::secure_bytearray generateKey()
 
 scl2::secure_bytearray acquire(const std::filesystem::path& keyPath)
 {
+    LOGT_LOCAL("keyvault::acquire");
     if (fs::exists(keyPath)) {
         scl2::secure_bytearray key = unprotect(readKeyFile(keyPath));
         logt.debug() << "Using the rule database key from " << keyPath;

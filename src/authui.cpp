@@ -13,7 +13,8 @@
 
 #include <string>
 
-LOGT_MODULE("authui");
+// Logging is claimed per function, with LOGT_LOCAL naming it in full. A file-wide signature is
+// constructed before main adds the channels, which is how it loses them.
 
 namespace authui {
 
@@ -113,7 +114,7 @@ HANDLE adminTokenForSession(DWORD sessionId)
 bool launchInSession(DWORD sessionId, const std::wstring& commandLine,
                      bool waitForExit, DWORD* exitCode)
 {
-    LOGT_LOCAL("launchInSession");
+    LOGT_LOCAL("authui::launchInSession");
 
     STARTUPINFO startup = {0};
     startup.cb = sizeof(STARTUPINFO);
@@ -181,7 +182,7 @@ bool launchInSession(DWORD sessionId, const std::wstring& commandLine,
 
 int confirm(const AutoSudoRequest& context, AuthUIType type, const callerid::CallerInfo* caller)
 {
-    LOGT_LOCAL("confirm");
+    LOGT_LOCAL("authui::confirm");
 
     std::wstring commandLine = (platform::executable_dir() / L"AuthUI.exe").wstring()
         + L" " + authUITypeName(type)
@@ -205,6 +206,7 @@ int confirm(const AutoSudoRequest& context, AuthUIType type, const callerid::Cal
 
 bool notify(const std::wstring& title, const std::wstring& body)
 {
+    LOGT_LOCAL("authui::notify");
     const DWORD sessionId = WTSGetActiveConsoleSessionId();
     if (sessionId == 0xFFFFFFFF) {
         logt.warn() << "There is no console session to notify, dropping: " << title;
@@ -216,7 +218,7 @@ bool notify(const std::wstring& title, const std::wstring& body)
 
 bool notify(DWORD sessionId, const std::wstring& title, const std::wstring& body)
 {
-    LOGT_LOCAL("notify");
+    LOGT_LOCAL("authui::notify");
 
     // Notifications belong to a session, and the service runs in session 0, which has none -
     // so AuthUI shows it where the user is. Nothing waits: the notification outlives both

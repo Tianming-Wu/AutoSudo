@@ -13,7 +13,6 @@ namespace fs = std::filesystem;
 namespace auth {
 
 class list {
-    LOGT_DECLARE
 public:
     list();
 
