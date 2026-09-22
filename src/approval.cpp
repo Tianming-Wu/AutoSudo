@@ -4,6 +4,8 @@
 #include <functional>
 #include <fstream>
 #include <chrono>
+#include <cstring>
+#include <stdexcept>
 
 // Thanks to the single-instance design of logt, this is as easy as including the header here.
 #include <SharedCppLib2/logt.hpp>
@@ -14,6 +16,122 @@
 #include "authlib.hpp"
 
 SINGLE_INSTANCE_IMPL(ApprovalEngine);
+
+namespace {
+
+// The field values the engine defines. A rule arrives from outside either way - off the
+// control channel, or out of the database - so both paths are checked against these.
+// An unchecked value is not harmless: evaluate() throws on an unknown type, and a rule
+// that allows a level with no token behind it decides who may run as what.
+
+bool isKnownRuleType(ApprovalRule::Type type)
+{
+    switch(type) {
+    case ApprovalRule::Type::Constant:
+    case ApprovalRule::Type::DirectoryRule:
+    case ApprovalRule::Type::FullPathRule:
+    case ApprovalRule::Type::ExecutableNameRule:
+    case ApprovalRule::Type::StartupDirectoryRule:
+    case ApprovalRule::Type::SidRule:
+    case ApprovalRule::Type::SessionRule:
+    case ApprovalRule::Type::ParameterRule:
+    case ApprovalRule::Type::ParametersRule:
+    case ApprovalRule::Type::CustomScriptRule:
+    case ApprovalRule::Type::DateRule:
+    case ApprovalRule::Type::TimeRule:
+    case ApprovalRule::Type::DateTimeRule:
+    case ApprovalRule::Type::FileTimeRule:
+    case ApprovalRule::Type::HashRule:
+    case ApprovalRule::Type::VoteRule:
+    case ApprovalRule::Type::DigitalSignatureRule:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool isKnownRuleEType(ApprovalRule::EType etype)
+{
+    switch(etype) {
+    case ApprovalRule::EType::Equal:
+    case ApprovalRule::EType::NotEqual:
+    case ApprovalRule::EType::Contains:
+    case ApprovalRule::EType::NotContains:
+    case ApprovalRule::EType::BeginWith:
+    case ApprovalRule::EType::NotBeginWith:
+    case ApprovalRule::EType::EndWith:
+    case ApprovalRule::EType::NotEndWith:
+    case ApprovalRule::EType::RegexMatch:
+    case ApprovalRule::EType::RegexNotMatch:
+    case ApprovalRule::EType::Greater:
+    case ApprovalRule::EType::GreaterEqual:
+    case ApprovalRule::EType::Less:
+    case ApprovalRule::EType::LessEqual:
+    case ApprovalRule::EType::NoneMatches:
+    case ApprovalRule::EType::AllMatches:
+    case ApprovalRule::EType::AnyMatches:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool isKnownRuleAction(ApprovalRule::Action action)
+{
+    switch(action) {
+    case ApprovalRule::Action::Approve:
+    case ApprovalRule::Action::Deny:
+    case ApprovalRule::Action::Bypass:
+    case ApprovalRule::Action::VoteUp:
+    case ApprovalRule::Action::VoteDown:
+    case ApprovalRule::Action::RequestConfirmation:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// Only the levels that have a token behind them can be allowed.
+bool isKnownAllowUpTo(PermissionLevel level)
+{
+    switch(level) {
+    case PermissionLevel::User:
+    case PermissionLevel::Admin:
+    case PermissionLevel::System:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// The first bytes of a rule database, followed by the format version and the rule count.
+// Without it, a file written by an older service would be read as if the current layout
+// applied, and every field after the first would mean something else.
+constexpr char databaseMagic[] = "ASRD";
+constexpr uint16_t databaseFormatVersion = 2;
+
+// Move a file that could not be parsed out of the way, so a later save does not write
+// over it, and so it is still there for whoever wants to look at it.
+void quarantineFile(const fs::path &filePath)
+{
+    LOGT_LOCAL("quarantineFile");
+
+    const fs::path target = filePath.wstring() + L".invalid";
+
+    std::error_code ec;
+    fs::remove(target, ec);
+    ec.clear();
+
+    fs::rename(filePath, target, ec);
+    if(ec) {
+        logt.error() << "Failed to move the unreadable file aside: " << target << ", " << ec.message();
+        return;
+    }
+
+    logt.warn() << "The unreadable file was kept as: " << target;
+}
+
+} // namespace
 
 bool ApprovalRule::evaluate(const ApprovalRequest &request) const
 {
@@ -258,6 +376,17 @@ bool ApprovalRule::__digsig_evaluate(const fs::path &path) const
 
 ApprovalRule ApprovalRule::create(Type type, EType etype, Action action, AllowUpTo allowUpTo, const scl2::bytearray &payload)
 {
+    // A rule carrying a value the engine does not define is a rule it cannot honour.
+    // Refusing here covers every way in, the control channel included.
+    if(!isKnownRuleType(type) || !isKnownRuleEType(etype) || !isKnownRuleAction(action)
+       || !isKnownAllowUpTo(allowUpTo)) {
+        throw std::invalid_argument("ApprovalRule::create: unknown rule field value");
+    }
+
+    if(payload.size() > limits::maxRulePayloadBytes) {
+        throw std::invalid_argument("ApprovalRule::create: payload exceeds the limit");
+    }
+
     ApprovalRule rule;
 
     rule.type = type;
@@ -287,7 +416,12 @@ ApprovalRule ApprovalRule::load(const scl2::bytearray &data)
     rule.allowUpTo = data.read<AllowUpTo>();
     rule.uid = data.read<apprule_uid_t>();
     rule.order = data.read<order_t>();
-    size_t payloadSize = data.read<size_t>();
+
+    // Explicit width: the payload length used to follow the machine word, so a database
+    // written by a 32-bit service could not be read by a 64-bit one.
+    const uint32_t payloadSize = data.read<uint32_t>();
+    if(payloadSize > limits::maxRulePayloadBytes)
+        throw std::runtime_error("ApprovalRule::load: payload exceeds the limit");
     rule.payload = data.readBytes(payloadSize);
 
     return rule;
@@ -307,7 +441,7 @@ scl2::bytearray ApprovalRule::dump(const ApprovalRule &rule)
 
     // We haven't add the nested bytearray handling, so we need to
     // manually append the size and content of the payload.
-    data.append<size_t>(rule.payload.size());
+    data.append(static_cast<uint32_t>(rule.payload.size()));
     data.append(rule.payload);
 
     return data;
@@ -425,8 +559,17 @@ bool ApprovalEngine::loadFile()
         return true;
     }
 
-    ApprovalEngine loaded = ApprovalEngine::load(data); // Actual load logic
-    rules = std::move(loaded.rules);
+    try {
+        ApprovalEngine loaded = ApprovalEngine::load(data); // Actual load logic
+        rules = std::move(loaded.rules);
+    } catch (const std::exception& ex) {
+        // A database that cannot be read is not a reason to stay down: with no rules the
+        // default action asks the user, which is the safe end of the scale.
+        logt.error() << "Failed to parse " << filePath << ": " << ex.what();
+        quarantineFile(filePath);
+        rules.clear();
+        return false;
+    }
 
     return true;
 }
@@ -812,14 +955,35 @@ ApprovalEngine ApprovalEngine::load(const scl2::bytearray &data)
     LOGT_LOCAL("ApprovalEngine::load");
     ApprovalEngine engine(false, false);
 
-    // Here is the engine header (currently empty)
+    scl2::bytearray header = data.readBytes(sizeof(databaseMagic) - 1);
+    if(std::memcmp(header.data(), databaseMagic, sizeof(databaseMagic) - 1) != 0) {
+        throw std::runtime_error("not an AutoSudo rule database, or an older format");
+    }
 
-    size_t ruleCount = data.read<size_t>();
+    const uint16_t formatVersion = data.read<uint16_t>();
+    if(formatVersion != databaseFormatVersion) {
+        throw std::runtime_error("rule database format " + std::to_string(formatVersion)
+                                 + ", this build writes " + std::to_string(databaseFormatVersion));
+    }
+
+    const uint32_t ruleCount = data.read<uint32_t>();
+    if(ruleCount > limits::maxRules) {
+        throw std::runtime_error("rule database holds more rules than the limit allows");
+    }
 
     logt.debug() << "Loading ApprovalEngine, expecting " << ruleCount << " rules";
 
-    for(size_t i = 0; i < ruleCount; ++i) {
+    for(uint32_t i = 0; i < ruleCount; ++i) {
         ApprovalRule rule = ApprovalRule::load(data);
+
+        // A rule the engine cannot interpret is dropped rather than carried: it would
+        // either be ignored at evaluation time, or take the whole evaluation down.
+        if(!isKnownRuleType(rule.type) || !isKnownRuleEType(rule.etype)
+           || !isKnownRuleAction(rule.action) || !isKnownAllowUpTo(rule.allowUpTo)) {
+            logt.error() << "Dropping rule uid " << rule.uid << ": it carries a field value this build does not define.";
+            continue;
+        }
+
         engine.rules.emplace(rule.order, std::move(rule));
     }
 
@@ -838,10 +1002,11 @@ scl2::bytearray ApprovalEngine::dump(const ApprovalEngine &engine)
     LOGT_LOCAL("ApprovalEngine::dump");
     scl2::bytearray data;
 
-    // Here is the engine header (currently empty)
+    // The engine header.
+    data.append(reinterpret_cast<const std::byte*>(databaseMagic), sizeof(databaseMagic) - 1);
+    data.append<uint16_t>(databaseFormatVersion);
 
-
-    data.append<size_t>(engine.rules.size());
+    data.append(static_cast<uint32_t>(engine.rules.size()));
 
     for(const auto &[order, rule] : engine.rules)
         {
