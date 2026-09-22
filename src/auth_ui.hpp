@@ -6,6 +6,14 @@
 */
 #pragma once
 
+// The identity a notification is shown under, and the Start menu shortcut that carries it.
+//
+// The shell reads the AUMID of a notification's sender from that shortcut, so both the
+// process showing one and the one that registers it have to agree on these.
+constexpr const wchar_t* notificationAumid = L"AutoSudo.Notifications";
+constexpr const wchar_t* notificationDisplayName = L"AutoSudo";
+constexpr const wchar_t* notificationShortcutName = L"AutoSudo.lnk";
+
 enum AuthUIType : int {
     NoRuleMatched = 0, InsufficientLevel = 1,
 };

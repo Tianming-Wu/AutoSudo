@@ -20,13 +20,12 @@
 #include "approval.hpp"
 
 #include "auth_ui.hpp"
+#include "authui.hpp"
 #include "callerid.hpp"
 #include "buildflags.hpp"
 
 #include <SharedCppLib2/platform.hpp>
 #include <SharedCppLib2/platform_windows.hpp>
-
-#define USERAUTH_WAIT_TIMEOUT 10000
 
 SERVICE_STATUS serviceStatus = {0};
 SERVICE_STATUS_HANDLE serviceStatusHandle = nullptr;
@@ -124,90 +123,9 @@ void UpdateServiceStatus(DWORD state, DWORD checkpoint = 0, DWORD waitHint = 0) 
     }
 }
 
-// The name a permission level goes by in the confirmation UI. A lookup with a fallback,
-// not an index: PermissionLevel has more values than the three that have a name, and the
-// array this used to index had exactly three entries.
-const wchar_t* levelName(PermissionLevel level)
-{
-    switch(level) {
-    case PermissionLevel::User:   return L"USER";
-    case PermissionLevel::Admin:  return L"ADMIN";
-    case PermissionLevel::System: return L"SYSTEM";
-    default:                      return L"UNKNOWN";
-    }
-}
-
-// The same for the kind of confirmation being asked for. This one is only ever called with
-// a constant, and it stays a lookup for the same reason as the one above.
-const wchar_t* authUITypeName(AuthUIType type)
-{
-    switch(type) {
-    case AuthUIType::NoRuleMatched:     return L"NORULEMATCHED";
-    case AuthUIType::InsufficientLevel: return L"INSUFFICIENTLEVEL";
-    default:                            return L"NORULEMATCHED";
-    }
-}
-
-int RequestUserConfirmation(const AutoSudoRequest& context, AuthUIType type) {
-    LOGT_LOCAL("RequestUserConfirmation");
-
-    // 构建确认对话框命令行
-    std::wstring commandLine = (platform::executable_dir() / L"AuthUI.exe").wstring()
-        + L" " + authUITypeName(type)
-        + L" " + levelName(context.requestedPermissionLevel)
-        + L" \"" + context.executableFullPath + L"\"";
-
-    logt.debug() << "Auth UI command: " << commandLine;
-    
-    // 使用管理员令牌启动UI，防止用户态进程可以模拟点击对话框
-    // 这是UI隔离的安全设计，确保确认框只能由高权限进程操作
-    HANDLE adminToken = wintoken::getAdminToken(context);
-    if(adminToken == nullptr) {
-        logt.error() << "Failed to get admin token for confirmation UI.";
-        return static_cast<int>(AuthUIResult::Deny);
-    }
-
-    DWORD targetSessionId = context.targetSessionId;
-    if (!SetTokenInformation(adminToken, TokenSessionId, &targetSessionId, sizeof(DWORD))) {
-        if (wintoken::isNonServiceMode()) {
-            logt.warn() << "SetTokenInformation failed in non-service mode, continue with current session token: "
-                        << platform::windows::TranslateLastError();
-        } else {
-            logt.error() << "SetTokenInformation failed: " << platform::windows::TranslateLastError();
-            CloseHandle(adminToken);
-            return static_cast<int>(AuthUIResult::Deny);
-        }
-    }
-    
-    STARTUPINFO si = {0};
-    PROCESS_INFORMATION pi = {0};
-    si.cb = sizeof(STARTUPINFO);
-    
-    BOOL success = CreateProcessAsUser(adminToken, nullptr, const_cast<LPWSTR>(commandLine.c_str()), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi);
-    
-    if (!success) {
-        logt.error() << "Failed to launch confirmation UI with admin token";
-        CloseHandle(adminToken);
-        return static_cast<int>(AuthUIResult::Deny);
-    }
-    
-    // 等待用户响应
-    DWORD waitResult = WaitForSingleObject(pi.hProcess, USERAUTH_WAIT_TIMEOUT); // 10秒超时
-    if (waitResult == WAIT_TIMEOUT) {
-        logt.warn() << "Confirmation UI timeout, terminating...";
-        TerminateProcess(pi.hProcess, 1); // 超时视为拒绝
-    }
-    
-    DWORD exitCode;
-    GetExitCodeProcess(pi.hProcess, &exitCode);
-    
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
-    CloseHandle(adminToken);
-    
-    logt.info() << "Confirmation UI result: " << exitCode;
-    return static_cast<int>(exitCode);
-}
+// The confirmation dialog and the notifications live in authui.cpp: this file is about the
+// channels and the process creation, and it was carrying enough of the user-facing side of
+// the service to make both harder to read.
 
 std::wstring MakeFullCommandLine(const AutoSudoRequest& request) {
     scl2::wstringlist args = request.arguments;
@@ -362,7 +280,7 @@ bool CreateProcessInUserSession(const AutoSudoRequest& request, std::string* bro
             ///TODO: Distinguish between no rules and not found.
             // Insufficient level is not supported by the current RuleEngine design.
 
-            if (RequestUserConfirmation(request, AuthUIType::NoRuleMatched) != static_cast<int>(AuthUIResult::Allow)) {
+            if (authui::confirm(request, AuthUIType::NoRuleMatched) != static_cast<int>(AuthUIResult::Allow)) {
                 return false;
             }
             // 用户确认，更新权限级别
@@ -886,6 +804,36 @@ void MainServiceLoop() {
 }
 
 
+// Load the rules, and tell the user when they are not in effect.
+//
+// A database that cannot be read must not keep the service from starting: no rules is "ask
+// the user about everything", which is the safe end of the scale. What it does need is
+// saying out loud - the rules the user wrote are not in effect, and nothing else would tell
+// them. That is what the notification is for; the service cannot show one from session 0,
+// so AuthUI shows it where the user is.
+void LoadApprovalRules(ApprovalEngine& engine)
+{
+    LOGT_LOCAL("LoadApprovalRules");
+
+    bool loaded = false;
+
+    try {
+        loaded = engine.loadFile();
+    } catch (const std::exception& ex) {
+        logt.error() << "Exception while loading the approval rules: " << ex.what();
+    }
+
+    if (loaded) {
+        return;
+    }
+
+    logt.error() << "Failed to load the approval rules, continuing with none.";
+
+    authui::notify(L"AutoSudo：规则库未通过校验",
+                   L"规则库无法读取或未通过完整性校验，已被移到 rules.db.invalid。"
+                   L"服务现在对所有请求都会询问你的意见。");
+}
+
 VOID WINAPI ServiceMain(DWORD argc, LPTSTR* argv) {
     LOGT_LOCAL("ServiceMain");
 
@@ -895,16 +843,7 @@ VOID WINAPI ServiceMain(DWORD argc, LPTSTR* argv) {
 
     ApprovalEngine engine; // Create engine instance
 
-    // A database that cannot be read must not keep the service from starting: no rules is
-    // "ask the user" for everything, which is the safe end of the scale.
-    try {
-        if(!engine.loadFile()) {
-            logt.error() << "Failed to load the approval rules, continuing with none.";
-        }
-    } catch (const std::exception& ex) {
-        logt.error() << "Exception while loading the approval rules: " << ex.what()
-                     << ", continuing with none.";
-    }
+    LoadApprovalRules(engine);
 
     serviceStatusHandle = RegisterServiceCtrlHandler(L"AutoSudoService", ServiceCtrlHandler);
     
@@ -981,14 +920,7 @@ int wmain(int argc, wchar_t** argv) {
         // to, and reaching through a null instance is what the check in
         // ProcessRuleOperation exists for.
         ApprovalEngine engine;
-        try {
-            if(!engine.loadFile()) {
-                logt.error() << "Failed to load the approval rules, continuing with none.";
-            }
-        } catch (const std::exception& ex) {
-            logt.error() << "Exception while loading the approval rules: " << ex.what()
-                         << ", continuing with none.";
-        }
+        LoadApprovalRules(engine);
         
         serviceStopEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
         MainServiceLoop();

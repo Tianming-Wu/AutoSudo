@@ -24,6 +24,12 @@ add_compile_definitions(LOGT_WCHAR_SUPPORT)
 
 find_package(SharedCppLib2 REQUIRED)
 
+# AuthUI uses SCF for the notifications (an elevated process handing a toast to the shell).
+# SCF is installed beside SharedCppLib2, so a configure that knows one of them knows both.
+get_filename_component(SharedCppLib2_PREFIX "${SharedCppLib2_DIR}/../../.." ABSOLUTE)
+list(APPEND CMAKE_PREFIX_PATH "${SharedCppLib2_PREFIX}")
+find_package(SCF REQUIRED)
+
 add_library(authlib STATIC src/authlib.cpp)
 target_link_libraries(authlib wintrust SharedCppLib2::api)
 # add_library(auth STATIC src/auth.cpp)
@@ -33,7 +39,7 @@ add_library(protocol STATIC src/protocol.cpp)
 target_link_libraries(protocol PRIVATE SharedCppLib2::basic)
 
 # service
-add_executable(AutoSudoSvc src/service_main.cpp src/wintoken.cpp src/approval.cpp src/callerid.cpp src/keyvault.cpp)
+add_executable(AutoSudoSvc src/service_main.cpp src/wintoken.cpp src/approval.cpp src/callerid.cpp src/keyvault.cpp src/authui.cpp)
 target_link_libraries(AutoSudoSvc protocol authlib wtsapi32 userenv crypt32 bcrypt SharedCppLib2::logt SharedCppLib2::platform SharedCppLib2::pipe SharedCppLib2::sha256 SharedCppLib2::xkeydb SharedCppLib2::singleinst) # auth
 target_include_directories(AutoSudoSvc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
@@ -48,7 +54,10 @@ set_target_properties(AutoSudoW PROPERTIES WIN32_EXECUTABLE TRUE)
 target_compile_definitions(AutoSudoW PUBLIC AUTOSUDO_GUI)
 
 # auth ui
+# scf_static rather than scf: one less DLL to deploy beside AuthUI, and the notification
+# code is a small part of what it links.
 add_executable(AuthUI src/auth_ui.cpp)
+target_link_libraries(AuthUI scf_static)
 set_target_properties(AuthUI PROPERTIES WIN32_EXECUTABLE TRUE)
 
 # broker
