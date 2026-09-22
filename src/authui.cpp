@@ -5,6 +5,7 @@
 
 #include <SharedCppLib2/platform.hpp>
 #include <SharedCppLib2/platform_windows.hpp>
+#include <SharedCppLib2/string.hpp>
 #include <SharedCppLib2/logt.hpp>
 
 #include <windows.h>
@@ -40,6 +41,27 @@ const wchar_t* authUITypeName(AuthUIType type)
     case AuthUIType::InsufficientLevel: return L"INSUFFICIENTLEVEL";
     default:                            return L"NORULEMATCHED";
     }
+}
+
+// The name a permission level goes by in front of the user. The dialog takes the short
+// upper case one; a notification has room to say what it means.
+const wchar_t* levelNameForUser(PermissionLevel level)
+{
+    switch(level) {
+    case PermissionLevel::User:   return L"用户级";
+    case PermissionLevel::Admin:  return L"管理员级";
+    case PermissionLevel::System: return L"SYSTEM";
+    default:                      return L"未知级别";
+    }
+}
+
+std::wstring describeCaller(const callerid::CallerInfo& caller)
+{
+    if (!caller.identified) {
+        return L"无法读取（连接的对端令牌读不出来）";
+    }
+
+    return scl2::str_to_wstr(caller.describe());
 }
 
 // One argument of a command line AuthUI will parse with CommandLineToArgvW: wrapped in
@@ -157,14 +179,18 @@ bool launchInSession(DWORD sessionId, const std::wstring& commandLine,
 
 } // namespace
 
-int confirm(const AutoSudoRequest& context, AuthUIType type)
+int confirm(const AutoSudoRequest& context, AuthUIType type, const callerid::CallerInfo* caller)
 {
     LOGT_LOCAL("confirm");
 
-    const std::wstring commandLine = (platform::executable_dir() / L"AuthUI.exe").wstring()
+    std::wstring commandLine = (platform::executable_dir() / L"AuthUI.exe").wstring()
         + L" " + authUITypeName(type)
         + L" " + levelName(context.requestedPermissionLevel)
         + L" " + quoteArgument(context.executableFullPath);
+
+    if (caller != nullptr) {
+        commandLine += L" " + quoteArgument(describeCaller(*caller));
+    }
 
     logt.debug() << "Auth UI command: " << commandLine;
 
@@ -201,6 +227,16 @@ bool notify(DWORD sessionId, const std::wstring& title, const std::wstring& body
     logt.debug() << "Notification command: " << commandLine;
 
     return launchInSession(sessionId, commandLine, false, nullptr);
+}
+
+bool notifyAutoApproved(const std::wstring& executable, PermissionLevel level,
+                        const callerid::CallerInfo& caller)
+{
+    const std::wstring body = executable
+        + L"\n允许至：" + levelNameForUser(level)
+        + L"\n\n发起进程：" + describeCaller(caller);
+
+    return notify(L"AutoSudo：已自动通过", body);
 }
 
 } // namespace authui

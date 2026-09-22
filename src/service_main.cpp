@@ -34,6 +34,7 @@ HANDLE serviceStopEvent = nullptr;
 HANDLE execPipeThread = nullptr;
 HANDLE controlPipeThread = nullptr;
 std::atomic<bool> shouldStopPipeThread{false};
+std::atomic<bool> pipeListenerFailed{false};
 
 // allowUnelevatedRuleCallers (buildflags.hpp) is what a debug build relaxes: the control
 // channel is created for everyone, a caller that is not elevated is accepted, and the key
@@ -176,7 +177,8 @@ bool CreateProcessWithContext(const AutoSudoRequest& context, HANDLE token) {
     return true;
 }
 
-bool CreateProcessInUserSession(const AutoSudoRequest& request, std::string* brokerToken, std::string* brokerPipeName) {
+bool CreateProcessInUserSession(const AutoSudoRequest& request, const callerid::CallerInfo& caller,
+                               std::string* brokerToken, std::string* brokerPipeName) {
     LOGT_LOCAL("CreateProcessInUserSession");
     DWORD targetSessionId = request.targetSessionId;
     
@@ -261,7 +263,11 @@ bool CreateProcessInUserSession(const AutoSudoRequest& request, std::string* bro
 
             // Check the permission level
             if (apr.allowUpTo >= request.requestedPermissionLevel) {
-                // Nothing goes wrong
+                // Nothing goes wrong. A rule allowed this and nobody was asked, which is the
+                // one outcome with no other way of reaching the user: the process is already
+                // starting by the time anyone could look at it.
+                authui::notifyAutoApproved(request.executableFullPath,
+                                           request.requestedPermissionLevel, caller);
                 break;
             } else {
                 logt.info() << "Approval engine allows up to " << static_cast<int>(apr.allowUpTo) 
@@ -280,7 +286,7 @@ bool CreateProcessInUserSession(const AutoSudoRequest& request, std::string* bro
             ///TODO: Distinguish between no rules and not found.
             // Insufficient level is not supported by the current RuleEngine design.
 
-            if (authui::confirm(request, AuthUIType::NoRuleMatched) != static_cast<int>(AuthUIResult::Allow)) {
+            if (authui::confirm(request, AuthUIType::NoRuleMatched, &caller) != static_cast<int>(AuthUIResult::Allow)) {
                 return false;
             }
             // 用户确认，更新权限级别
@@ -467,7 +473,7 @@ bool HandleExecutionRequest(scl2::pipe::server_client& client, const scl2::bytea
 
     if (request.useCurrentSession && request.targetSessionId != 0xFFFFFFFF) {
         logt.debug() << "using CreateProcessInUserSession";
-        success = CreateProcessInUserSession(request, &brokerToken, &brokerMsgPipe);
+        success = CreateProcessInUserSession(request, caller, &brokerToken, &brokerMsgPipe);
     } else {
         logt.debug() << "using CreateProcessWithContext";
         // No session was asked for, so the approved level is what the child runs as: the
@@ -728,7 +734,14 @@ DWORD WINAPI PipeListenerThread(LPVOID param) {
     server.setPipeMode(scl2::pipe::mode::Message);
 
     if(!server.start()) {
-        logt.error() << "Failed to start the pipe server on " << channel.name;
+        // The usual reason is another instance: start() claims the name, so a second server on
+        // it fails instead of sharing it. That is worth spelling out, because the service
+        // otherwise looks like it started and quietly serves nobody.
+        logt.error() << "Failed to start the pipe server on " << channel.name << ": "
+                     << platform::windows::TranslateLastError();
+        logt.error() << "Another instance of this service is probably already listening, or a "
+                        "debug run was left behind.";
+        pipeListenerFailed = true;
         return 1;
     }
 
@@ -778,6 +791,7 @@ void MainServiceLoop() {
     }
 
     shouldStopPipeThread = false;
+    pipeListenerFailed = false;
     execPipeThread = CreateThread(nullptr, 0, PipeListenerThread, const_cast<PipeChannel*>(&execChannel), 0, nullptr);
     controlPipeThread = CreateThread(nullptr, 0, PipeListenerThread, const_cast<PipeChannel*>(&controlChannel), 0, nullptr);
     if (!execPipeThread || !controlPipeThread) {
@@ -785,7 +799,15 @@ void MainServiceLoop() {
         return;
     }
     
-    WaitForSingleObject(serviceStopEvent, INFINITE);
+    // A listener that could not claim its name leaves the service with nothing to serve, so it
+    // stops instead of staying up and looking healthy. The thread that failed has already said
+    // why, in the log.
+    while (WaitForSingleObject(serviceStopEvent, 1000) == WAIT_TIMEOUT) {
+        if (pipeListenerFailed) {
+            logt.error() << "A pipe listener could not start, stopping the service.";
+            SetEvent(serviceStopEvent);
+        }
+    }
 
     shouldStopPipeThread = true;
     

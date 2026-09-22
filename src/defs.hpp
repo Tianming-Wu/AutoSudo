@@ -35,8 +35,20 @@ enum class ClientRequestType : uint8_t {
 // The control channel carries rule operations, which change that gate - so it is
 // created for Administrators and LocalSystem only, and the service checks the
 // caller's token again on every connection.
+// A debug build listens on names of its own.
+//
+// The pipe is what keeps a name to one server (start() claims it), so an installed service and
+// a debug run cannot both sit on the same name - and without this, testing a debug build on a
+// machine that has the service installed would have them fight over it, with the operating
+// system handing each client to whichever it liked. Clients are built in the same
+// configuration, so both ends move together.
+#ifdef _DEBUG
+inline constexpr const char* execPipeName = R"(\\.\pipe\__dbg__AutoSudoPipe)";
+inline constexpr const char* controlPipeName = R"(\\.\pipe\__dbg__AutoSudoPipeCtl)";
+#else
 inline constexpr const char* execPipeName = R"(\\.\pipe\AutoSudoPipe)";
 inline constexpr const char* controlPipeName = R"(\\.\pipe\AutoSudoPipeCtl)";
+#endif
 
 // Limits a message off the wire is held to. A sender that exceeds one is refused,
 // not truncated: it is either not one of ours or broken, and guessing which is not

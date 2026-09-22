@@ -111,6 +111,13 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     std::wstring authLevel = argv[2];    // USER, ADMIN, SYSTEM
     std::wstring programPath = argv[3];  // 程序路径
 
+    // 发起进程：服务从连接对端的令牌里读出来的，不是请求里自称的（客户端无法伪造）。
+    // 旧调用方不给这个参数，那时这一段为空。
+    std::wstring callerLine;
+    if (argc >= 5) {
+        callerLine = L"\n\n发起进程: " + std::wstring(argv[4]);
+    }
+
     // 构建确认消息
     std::wstring message;
     std::wstring title = L"AutoSudo 权限请求";
@@ -119,13 +126,13 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     case NoRuleMatched:
         message = L"没有规则匹配程序：\n\n"
                   L"程序: " + programPath + L"\n\n"
-                  L"请求权限级别: " + authLevel + L"\n\n"
+                  L"请求权限级别: " + authLevel + callerLine + L"\n\n"
                   L"是否允许执行？";
         break;
     case InsufficientLevel:
         message = L"程序需要提升权限级别：\n\n"
                   L"程序: " + programPath + L"\n\n"
-                  L"当前允许级别不足，请求提升至: " + authLevel + L"\n\n"
+                  L"当前允许级别不足，请求提升至: " + authLevel + callerLine + L"\n\n"
                   L"是否同意提升权限？";
         break;
     

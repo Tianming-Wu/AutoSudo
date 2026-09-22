@@ -20,6 +20,7 @@
 
 #include "protocol.hpp"
 #include "auth_ui.hpp"
+#include "callerid.hpp"
 
 namespace authui {
 
@@ -27,7 +28,23 @@ namespace authui {
 inline constexpr unsigned long confirmationTimeoutMs = 10000;
 
 /// Ask the user, in the session the request came from. The result is one of AuthUIResult.
-int confirm(const AutoSudoRequest& context, AuthUIType type);
+///
+/// `caller` is what the service read off the other end of the connection. It goes into the
+/// dialog because the user is being asked to trust a program, and a dialog that names only
+/// the program cannot answer "who wants this" - which is the question that decides it.
+/// Null when there is nobody to name.
+int confirm(const AutoSudoRequest& context, AuthUIType type,
+            const callerid::CallerInfo* caller = nullptr);
+
+/// Tell the user that a request went through without asking them: a rule allowed it, and no
+/// dialog appeared. This is the one outcome they have no other way of hearing about, because
+/// the process is already starting by the time anyone could look.
+///
+/// A refusal is deliberately not notified: whoever asked for it is already being told, and
+/// turning refusals into notifications would let any local process put text on the user's
+/// screen just by asking for something that will be denied.
+bool notifyAutoApproved(const std::wstring& executable, PermissionLevel level,
+                        const callerid::CallerInfo& caller);
 
 /// Tell the user something they did not ask for and have to know about: a rule database that
 /// was refused, an execution that went through without asking. Shown in the session of the
