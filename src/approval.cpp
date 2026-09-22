@@ -5,6 +5,7 @@
 #include <fstream>
 #include <chrono>
 #include <cstring>
+#include <set>
 #include <stdexcept>
 #include <string_view>
 
@@ -958,6 +959,69 @@ bool ApprovalEngine::moveDown(apprule_uid_t uid)
     order_t maxOrder = static_cast<order_t>(rules.size());
     if (it->second.order >= maxOrder) return true;
     return moveTo(uid, static_cast<order_t>(it->second.order + 1));
+}
+
+bool ApprovalEngine::importRules(const std::vector<RuleEntry> &incoming, std::string &reason)
+{
+    LOGT_LOCAL("ApprovalEngine::importRules");
+
+    if(incoming.size() > limits::maxRules) {
+        reason = "more rules than the limit allows";
+        return false;
+    }
+
+    // The order the file lists them in is the order they end up in: the numbers are ours to
+    // hand out, and the map the engine keeps is keyed by them.
+    std::vector<RuleEntry> ordered = incoming;
+    std::stable_sort(ordered.begin(), ordered.end(),
+                     [](const RuleEntry& left, const RuleEntry& right) { return left.order < right.order; });
+
+    RuleMap imported;
+    std::set<apprule_uid_t> seenUids;
+    order_t order = 1;
+
+    try {
+        for(const RuleEntry& entry : ordered) {
+            if(entry.uid == 0) {
+                reason = "a rule without a uid";
+                return false;
+            }
+
+            if(!seenUids.insert(entry.uid).second) {
+                reason = "two rules with uid " + std::to_string(entry.uid);
+                return false;
+            }
+
+            // create() checks the field values against the ones this build defines and the
+            // payload against the limit - the same checks a rule arriving over the control
+            // channel goes through, because this is another way to put one there.
+            ApprovalRule rule = ApprovalRule::create(
+                static_cast<ApprovalRule::Type>(entry.type),
+                static_cast<ApprovalRule::EType>(entry.etype),
+                static_cast<ApprovalRule::Action>(entry.action),
+                entry.allowUpTo,
+                entry.payload);
+
+            rule.uid = entry.uid;
+            rule.order = order;
+            imported.emplace(order, std::move(rule));
+            ++order;
+        }
+    } catch(const std::exception& ex) {
+        reason = ex.what();
+        return false;
+    }
+
+    rules = std::move(imported);
+
+    logt.info() << "Imported " << rules.size() << " rules, replacing what was there.";
+
+    if(autosave) {
+        save();
+    }
+
+    reason.clear();
+    return true;
 }
 
 std::vector<RuleEntry> ApprovalEngine::listRules() const

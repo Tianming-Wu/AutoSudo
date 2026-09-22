@@ -215,6 +215,15 @@ public:
                 std::optional<order_t> moveToOrder = std::nullopt);
     bool remove(apprule_uid_t uid);
 
+    /// Replace every rule with `rules`, keeping the uids they carry.
+    ///
+    /// An import is the policy as a whole, so it is applied as a whole: every rule is checked
+    /// first and the set is swapped only when all of them pass. The uids stay the ones the
+    /// file named, because a uid is what anything referring to a rule refers to it by; the
+    /// order the file lists them in is the order they end up in, and the numbers themselves
+    /// are handed out here. `reason` says why a set was refused.
+    bool importRules(const std::vector<RuleEntry>& incoming, std::string& reason);
+
     bool moveTo(apprule_uid_t uid, order_t targetOrder);
     bool moveUp(apprule_uid_t uid);
     bool moveDown(apprule_uid_t uid);

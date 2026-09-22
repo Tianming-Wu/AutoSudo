@@ -110,31 +110,51 @@ bool RuleClient::listRules(std::vector<RuleEntry>& outRules) {
     return false;
 }
 
+bool RuleClient::importRules(const std::vector<RuleEntry>& rules) {
+    LOGT_LOCAL("RuleClient::importRules");
+
+    RuleEngineOperationRequest op;
+    op.op = RuleEngineOperation::Import;
+
+    RuleSet set;
+    set.rules = rules;
+    op.payload = set.dump();
+
+    RuleEngineOperationResult result;
+    return sendOperation(op, result) && result.success;
+}
+
 bool RuleClient::sendOperation(const RuleEngineOperationRequest& opreq, RuleEngineOperationResult& result) {
     LOGT_LOCAL("RuleClient::sendOperation<RuleOpResult>");
-    
+
+    lastFailure = Failure::None;
     scl2::pipe::client client(pipeName);
     
     if (!client.waitForConnection(std::chrono::seconds(1))) {
-        logt.error() << "Failed to connect to AutoSudo service.";
+        lastFailure = Failure::NotReached;
+        logt.error() << "Failed to connect to the control channel. The service is either not "
+                        "running, or it does not let this process in.";
         return false;
     }
     
     const scl2::bytearray request = makeRequestFrame(ClientRequestType::RuleEngineCommand, opreq.dump());
 
     if (client.write(request) == 0) {
+        lastFailure = Failure::SilentRefusal;
         logt.error() << "Failed to send rule operation to service.";
         return false;
     }
     
     // Wait for response
     if (!client.waitForReadyRead(std::chrono::seconds(5))) {
-        logt.error() << "Timeout waiting for rule operation response.";
+        lastFailure = Failure::SilentRefusal;
+        logt.error() << "The service closed the connection without answering the rule operation.";
         return false;
     }
     
     scl2::bytearray responseData = client.readAll();
     if (responseData.empty()) {
+        lastFailure = Failure::SilentRefusal;
         logt.error() << "Empty response from service.";
         return false;
     }
@@ -143,6 +163,7 @@ bool RuleClient::sendOperation(const RuleEngineOperationRequest& opreq, RuleEngi
         result = RuleEngineOperationResult::load(responseData);
         return true;
     } catch (const std::exception& e) {
+        lastFailure = Failure::UnreadableAnswer;
         logt.error() << "Failed to parse rule operation response: " << e.what();
         return false;
     }
@@ -150,11 +171,14 @@ bool RuleClient::sendOperation(const RuleEngineOperationRequest& opreq, RuleEngi
 
 bool RuleClient::sendOperation(const RuleEngineOperationRequest& opreq, RuleListResponse& response) {
     LOGT_LOCAL("RuleClient::sendOperation<RuleListResponse>");
-    
+
+    lastFailure = Failure::None;
     scl2::pipe::client client(pipeName);
     
     if (!client.waitForConnection(std::chrono::seconds(1))) {
-        logt.error() << "Failed to connect to AutoSudo service.";
+        lastFailure = Failure::NotReached;
+        logt.error() << "Failed to connect to the control channel. The service is either not "
+                        "running, or it does not let this process in.";
         return false;
     }
     
@@ -162,18 +186,21 @@ bool RuleClient::sendOperation(const RuleEngineOperationRequest& opreq, RuleList
     const scl2::bytearray requestData = makeRequestFrame(ClientRequestType::RuleEngineCommand, opreq.dump());
     
     if (client.write(requestData) == 0) {
+        lastFailure = Failure::SilentRefusal;
         logt.error() << "Failed to send rule list operation to service.";
         return false;
     }
     
     // Wait for response
     if (!client.waitForReadyRead(std::chrono::seconds(5))) {
-        logt.error() << "Timeout waiting for rule list response.";
+        lastFailure = Failure::SilentRefusal;
+        logt.error() << "The service closed the connection without answering the rule list request.";
         return false;
     }
     
     scl2::bytearray responseData = client.readAll();
     if (responseData.empty()) {
+        lastFailure = Failure::SilentRefusal;
         logt.error() << "Empty response from service.";
         return false;
     }
@@ -182,8 +209,7 @@ bool RuleClient::sendOperation(const RuleEngineOperationRequest& opreq, RuleList
         response = RuleListResponse::load(responseData);
         logt.info() << "Parsed rule list response, count=" << response.rules.size();
         return true;
-    } catch (const std::exception& e) {
-        logt.error() << "Failed to parse rule list response: " << e.what();
+    } catch (const std::exception& e) {        lastFailure = Failure::UnreadableAnswer;        logt.error() << "Failed to parse rule list response: " << e.what();
         return false;
     }
 }

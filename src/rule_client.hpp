@@ -47,6 +47,25 @@ public:
     std::vector<RuleEntry> listRules();
     bool listRules(std::vector<RuleEntry>& outRules);
 
+    // Replace every rule with these, uids and order included. Returns true on success.
+    bool importRules(const std::vector<RuleEntry>& rules);
+
+    // What the last operation ran into, so a caller can tell the two things a client is in a
+    // position to know apart. The service does not send a reply when it refuses a caller - a write
+    // to a client that is not reading would hold a service thread, which is not worth it for a
+    // message - so a refusal arrives as a connection that was taken and then closed, and that is
+    // a different state from a channel that could not be opened at all.
+    enum class Failure {
+        None,             // nothing has failed since this object was made
+        NotReached,       // the control channel could not be opened: no service, or not let in
+        SilentRefusal,    // the request was taken, then the connection closed with no answer
+        UnreadableAnswer, // an answer arrived, but not one this build could read
+    };
+
+    // The kind of the last failure, for a caller that wants to say something different about each
+    // kind. describeFailure() turns it into a sentence.
+    Failure failure() const { return lastFailure; }
+
 private:
     // Helper to send an operation and receive result
     bool sendOperation(const RuleEngineOperationRequest& opreq, RuleEngineOperationResult& result);
@@ -54,4 +73,5 @@ private:
     
     std::string pipeName;
     bool connected;
+    Failure lastFailure = Failure::None;
 };

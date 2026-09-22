@@ -42,7 +42,12 @@ enum class ClientRequestType : uint8_t {
 // machine that has the service installed would have them fight over it, with the operating
 // system handing each client to whichever it liked. Clients are built in the same
 // configuration, so both ends move together.
-#ifdef _DEBUG
+//
+// AUTOSUDO_FORCE_DEBUG_CHANNEL pins the debug names from a build that is not a debug build. The
+// rules CLI sets it, and compiles the client side of the SDK itself so the define reaches the
+// code that picks the name: that tool edits raw rules, and a release build of it would otherwise
+// be pointed at the installed service, which runs as LocalSystem and whose policy matters.
+#if defined(_DEBUG) || defined(AUTOSUDO_FORCE_DEBUG_CHANNEL)
 inline constexpr const char* execPipeName = R"(\\.\pipe\__dbg__AutoSudoPipe)";
 inline constexpr const char* controlPipeName = R"(\\.\pipe\__dbg__AutoSudoPipeCtl)";
 #else
@@ -80,5 +85,6 @@ enum class RuleEngineOperation : uint16_t {
     Modify = 5,
     Delete = 10,
     Move = 15,
-    List = 20
+    List = 20,
+    Import = 25, // replace every rule with the ones the request carries, uids included
 };

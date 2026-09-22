@@ -16,6 +16,7 @@ bool isKnownRuleOperation(RuleEngineOperation op)
     case RuleEngineOperation::Delete:
     case RuleEngineOperation::Move:
     case RuleEngineOperation::List:
+    case RuleEngineOperation::Import:
         return true;
     default:
         return false;
@@ -191,14 +192,24 @@ bool RuleEngineOperationRequest::validate(std::string &reason) const
         return false;
     }
 
-    if(payload.size() > limits::maxRulePayloadBytes) {
+    // An import carries a whole set of rules, so its payload is bounded by what one request
+    // may carry rather than by what one rule may.
+    const uint32_t payloadLimit = (op == RuleEngineOperation::Import)
+        ? limits::maxRequestBytes : limits::maxRulePayloadBytes;
+
+    if(payload.size() > payloadLimit) {
         reason = "rule payload is larger than the limit";
         return false;
     }
 
-    // A rule is never created with uid 0: the engine hands out the smallest free number,
-    // and 0 is what it reports when it runs out. So 0 is not a rule to act on.
-    if(op != RuleEngineOperation::Create && op != RuleEngineOperation::List && targetUid == 0) {
+    // A rule is never created with uid 0: the engine hands out the smallest free number, and
+    // 0 is what it reports when it runs out, so 0 is not a rule to act on. An import names
+    // its own uids, and an empty set is a legitimate thing to import.
+    const bool needsTarget = op == RuleEngineOperation::Modify
+                          || op == RuleEngineOperation::Delete
+                          || op == RuleEngineOperation::Move;
+
+    if(needsTarget && targetUid == 0) {
         reason = "operation without a target rule";
         return false;
     }

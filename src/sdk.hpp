@@ -120,6 +120,23 @@ bool MoveRule(uint16_t uid, uint16_t targetOrder);
 bool DeleteRule(uint16_t uid);
 bool ReorderRulesByUidOrder(const std::vector<uint16_t>& orderedUids);
 
+// Whole-set import and export.
+//
+// The caller hands over a path and nothing else; the file is read and written here, by the
+// process the user is running. That is deliberate - a service that wrote to a path a client
+// named would be an arbitrary file write as LocalSystem.
+//
+// The file is one opaque blob: base64 of the compact JSON, so the enum values in it are
+// numbers and a rule's payload survives whatever bytes it holds. It is not meant to be edited
+// by hand. `error`, when given, receives what went wrong.
+
+bool ExportRules(const fs::path& file, std::string* error = nullptr);
+bool ImportRules(const fs::path& file, std::string* error = nullptr);
+
+// The failure a RuleClient reports, in a sentence a person can act on. It lives here rather than at
+// each call site so that the CLI, the GUI and the SDK's own file functions say the same thing.
+std::string describeFailure(RuleClient::Failure failure);
+
 
 // Helper functions for Combobox usage
 std::vector<std::pair<std::string, Rule::EType>> getAvailableETypes(Rule::Type type);

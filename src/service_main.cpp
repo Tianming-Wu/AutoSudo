@@ -605,6 +605,23 @@ bool ProcessRuleOperation(scl2::pipe::server_client& client, const scl2::bytearr
                 break;
             }
             
+            case RuleEngineOperation::Import: {
+                logt.info() << "Importing a rule set";
+
+                // The rules in it are checked by the engine, and the set replaces the current
+                // one only if all of them pass: half a policy is not a policy.
+                const RuleSet imported = RuleSet::load(op.payload);
+
+                std::string importReason;
+                const bool imported_ok = enginePtr->importRules(imported.rules, importReason);
+
+                result.success = imported_ok;
+                result.message = imported_ok
+                    ? ("Imported " + std::to_string(imported.rules.size()) + " rule(s)")
+                    : ("Failed to import rules: " + importReason);
+                break;
+            }
+
             case RuleEngineOperation::List: {
                 logt.info() << "Listing all rules";
                 RuleListResponse listResponse;

@@ -66,11 +66,36 @@ target_link_libraries(AutoSudoBroker protocol wtsapi32 userenv SharedCppLib2::lo
 set_target_properties(AutoSudoBroker PROPERTIES WIN32_EXECUTABLE TRUE)
 target_link_options(AutoSudoBroker PRIVATE /ENTRY:mainCRTStartup)
 
+# A rules CLI, for debug runs only.
+# The GUI is how a rule set is meant to be handled, but a GUI is a poor place to test what is
+# underneath it. This drives the control channel from a shell, so a set can be listed, edited,
+# exported and imported without a window in the way.
+# EXCLUDE_FROM_ALL keeps a tool for working on the service out of every normal build, and the
+# define pins it to the debug channel whatever configuration it is built in - see defs.hpp. The
+# client side of the SDK is compiled here rather than linked from AutoSudoSdk because that define
+# has to reach the code that picks the pipe name.
+add_executable(AutoSudoRuleCli EXCLUDE_FROM_ALL
+    src/rules_cli.cpp
+    src/sdk.cpp
+    src/rules_io.cpp
+    src/rule_client.cpp
+    src/protocol.cpp
+)
+target_link_libraries(AutoSudoRuleCli SharedCppLib2::basic SharedCppLib2::logt SharedCppLib2::platform SharedCppLib2::pipe SharedCppLib2::json SharedCppLib2::base64)
+target_compile_definitions(AutoSudoRuleCli PRIVATE
+    SCL2_JSON_ENABLE_EXTENSIONS
+    AUTOSUDO_FORCE_DEBUG_CHANNEL
+)
+
 
 
 # sdk
-add_library(AutoSudoSdk STATIC src/protocol.cpp src/sdk.cpp src/rule_client.cpp)
+add_library(AutoSudoSdk STATIC src/protocol.cpp src/sdk.cpp src/rule_client.cpp src/rules_io.cpp)
 target_link_libraries(AutoSudoSdk PUBLIC SharedCppLib2::basic SharedCppLib2::pipe)
+target_link_libraries(AutoSudoSdk PRIVATE SharedCppLib2::json SharedCppLib2::base64)
+# A rule's payload is bytes, and the export format carries it as the json extension's
+# "base64:..." string, so the SDK is built with that extension on.
+target_compile_definitions(AutoSudoSdk PRIVATE SCL2_JSON_ENABLE_EXTENSIONS)
 target_include_directories(AutoSudoSdk PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
     $<INSTALL_INTERFACE:include/AutoSudoSdk>
@@ -99,7 +124,7 @@ configure_package_config_file(
 
 write_basic_package_version_file(
     ${CMAKE_CURRENT_BINARY_DIR}/AutoSudoSdkConfigVersion.cmake
-    VERSION 2.0.0
+    VERSION 2.1.0
     COMPATIBILITY SameMajorVersion
 )
 

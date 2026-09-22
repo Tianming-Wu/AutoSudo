@@ -116,6 +116,10 @@ struct RuleListResponse {
 
 scl2_check_generic_dump_load(RuleListResponse);
 
+// The same shape in the other direction: an import carries the whole set of rules, and the
+// fields are exactly the ones a list response has, so the type is shared instead of copied.
+using RuleSet = RuleListResponse;
+
 
 // ── The request frame ─────────────────────────────────────────────
 //
